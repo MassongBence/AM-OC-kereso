@@ -1,5 +1,6 @@
-import {pairRows, pairCells, parseCSV, parseText, normalizeKey, extractPlaces, cellGeometry} from './table-core.js';
+import {pairCells, parseCSV, parseText, normalizeKey, extractPlaces, cellGeometry} from './table-core.js';
 import {recognizeCell} from './cell-ocr.js';
+import {parseSpreadsheet} from './spreadsheet-import.js';
 import {prepareDocument, imageFileToCanvas, assignWordsToCells} from './image-pipeline.js';
 
 const asset = path => new URL(path, import.meta.url).href;
@@ -14,6 +15,15 @@ async function loadScript(path) {
     document.head.append(script);
   }));
   return scripts.get(url);
+}
+
+export function abortable(promise,signal) {
+  if(!signal)return Promise.resolve(promise);
+  return new Promise((resolve,reject)=>{
+    const stop=()=>{signal.removeEventListener('abort',stop);reject(new DOMException('A feldolgozás megszakítva.','AbortError'));};
+    Promise.resolve(promise).then(value=>{signal.removeEventListener('abort',stop);if(signal.aborted)stop();else resolve(value);},error=>{signal.removeEventListener('abort',stop);reject(error);});
+    if(signal.aborted)stop();else signal.addEventListener('abort',stop,{once:true});
+  });
 }
 
 export function validatedDatabase(value) {
@@ -35,34 +45,41 @@ export function validLocationList(value) {
 
 /** A single worker per batch bounds mobile memory. Every image/PDF is sequential. */
 export class DocumentImporter {
-  constructor({onStatus = () => {}, rotation = 0, corners = null} = {}) {
+  constructor({onStatus = () => {}, rotation = 0, corners = null, signal = null} = {}) {
+    this.signal=signal;this.cancelled=false;
     this.onStatus = onStatus; this.rotation = rotation; this.corners = corners; this.worker = null; this.workerPromise = null;
     this.previews = new Map(); this.issues = []; this.objectURLs = []; this.diagnostics = [];
   }
+  ensureActive() {if(this.cancelled||this.signal?.aborted)throw new DOMException('A feldolgozás megszakítva.','AbortError');}
+  cancel() {this.cancelled=true;this.disposePreviews();return this.close();}
   async getWorker() {
+    this.ensureActive();
     if (!this.workerPromise) this.workerPromise = (async () => {
-      await loadScript('../vendor/tesseract.min.js');
+      await loadScript('../vendor/tesseract.min.js');this.ensureActive();
       this.onStatus('Képfelismerő indítása…');
-      this.worker = await Tesseract.createWorker('eng', 1, {
-        workerPath: asset('../vendor/worker.min.js'),
-        corePath: asset('../vendor/tesseract-core-lstm.wasm.js'),
-        langPath: asset('../vendor/lang'),
-        workerBlobURL: false,
-        logger: event => { if (event.status === 'recognizing text') this.onStatus('Karakterfelismerés: ' + Math.round((event.progress || 0) * 100) + '%'); },
+      const raw=await Tesseract.createWorker('eng',1,{
+        workerPath:asset('../vendor/worker.min.js'),corePath:asset('../vendor/tesseract-core-lstm.wasm.js'),langPath:asset('../vendor/lang'),workerBlobURL:false,
+        logger:event=>{if(!this.cancelled&&!this.signal?.aborted&&event.status==='recognizing text')this.onStatus('Karakterfelismerés: '+Math.round((event.progress||0)*100)+'%');},
       });
-      await this.worker.setParameters({tessedit_pageseg_mode: '11', preserve_interword_spaces: '1'});
-      return this.worker;
+      if(this.cancelled||this.signal?.aborted){await raw.terminate();this.ensureActive();}
+      this.worker=raw;
+      const wrap=method=>(...args)=>{this.ensureActive();return abortable(raw[method](...args),this.signal);};
+      const worker={setParameters:wrap('setParameters'),recognize:wrap('recognize')};
+      await worker.setParameters({tessedit_pageseg_mode:'11',preserve_interword_spaces:'1'});this.ensureActive();return worker;
     })();
-    return this.workerPromise;
+    return abortable(this.workerPromise,this.signal);
   }
   async savePreview(canvas, source) {
+    this.ensureActive();
     const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', .75));
-    if (!blob) return;
+    this.ensureActive();if(!blob)return;
     const url = URL.createObjectURL(blob); this.objectURLs.push(url); this.previews.set(source, url);
   }
   async ocr(canvas, source) {
+    this.ensureActive();
     const prepared = await prepareDocument(canvas, {rotation: this.rotation, corners: this.corners});
     try {
+      this.diagnostics.push({source,method:'image-pipeline',...prepared.diagnostics});
       this.issues.push(...prepared.warnings.map(w => source + ': ' + w));
       await this.savePreview(canvas, source);
       const worker = await this.getWorker();
@@ -71,7 +88,7 @@ export class DocumentImporter {
         if (prepared.cells.length > 500) throw new Error('Több mint 500 cella egy oldalon. Vágd kisebb táblázatokra.');
         cells = [];
         for (let i=0; i<prepared.cells.length; i++) {
-          const box = prepared.cells[i];
+          this.ensureActive();const box = prepared.cells[i];
           this.onStatus(source + ': cella ' + (i+1) + '/' + prepared.cells.length + ' · OCR-módszerek összehasonlítása');
           cells.push(await recognizeCell(worker,prepared,box));
         }
@@ -93,14 +110,18 @@ export class DocumentImporter {
       if (prepared.cells.length) records=attachConsensusEvidence(records,cells);
       // Text fallback remains explicitly uncertain; it invents no cell spans.
       if (!records.length && data?.text) records=parseText(data.text,{source}).map(row=>({...row,uncertain:true,reasons:[...row.reasons,'OCR: nem áll rendelkezésre megbízható cellaszerkezet.']}));
-      this.diagnostics.push({source,method:'cell-consensus',reading:'consensus-with-visible-suggestions',preprocessing:{angle:prepared.angle,perspective:prepared.perspective,cellCount:prepared.cells.length},records});
+      const glyphs=cells.map(cell=>cell.evidence?.glyphHeight).filter(value=>Number.isFinite(value)&&value>0).sort((a,b)=>a-b);
+      this.diagnostics.push({source,method:'cell-consensus',reading:'consensus-with-visible-suggestions',preprocessing:{angle:prepared.angle,perspective:prepared.perspective,cellCount:prepared.cells.length,glyphPixels:glyphs.length?{min:glyphs[0],median:glyphs[Math.floor(glyphs.length/2)],max:glyphs[glyphs.length-1],sampledCells:glyphs.length}:null},records});
       return records;
     } finally {
       prepared.canvas.width = prepared.canvas.height = 1;
       if (prepared.grayCanvas) prepared.grayCanvas.width = prepared.grayCanvas.height = 1;
     }
   }
-  async read(file, {label = file.name} = {}) {
+  async read(file, options = {}) {
+    this.ensureActive();const result=await abortable(this.readFile(file,options),this.signal);this.ensureActive();return result;
+  }
+  async readFile(file, {label = file.name} = {}) {
     const ext = file.name.split('.').pop().toLowerCase();
     if (file.size > 60 * 1024 * 1024) throw new Error('A fájl nagyobb 60 MB-nál. Bontsd kisebb részekre.');
     if (['json','csv','txt'].includes(ext) && file.size > 5 * 1024 * 1024) throw new Error('A szöveges fájl nagyobb 5 MB-nál. Bontsd kisebb részekre.');
@@ -109,25 +130,24 @@ export class DocumentImporter {
       const db = validatedDatabase(parsed.database ?? parsed);
       return Object.entries(db).map(([key, loc]) => ({key, loc, source: label, uncertain: false, reasons: []}));
     }
-    if (ext === 'csv') return pairRows(parseCSV(await file.text()), {source: label});
+    if(ext==='csv'){const parsed=parseSpreadsheet([{name:'CSV',rows:parseCSV(await file.text())}],{source:label});this.diagnostics.push({source:label,method:'digital-csv',sheets:parsed.diagnostics,duplicatePairs:parsed.duplicatePairs,records:parsed.records});this.issues.push(...parsed.warnings);return parsed.records;}
     if (ext === 'txt') return parseText(await file.text(), {source: label});
     if (ext === 'xlsx' || ext === 'xls') {
-      const sheets = await readWorkbook(await file.arrayBuffer());
-      const records = [];
-      for (const {name, rows, merges} of sheets) {
-        records.push(...pairRows(rows, {merges, source: label + ' · ' + name}));
-      }
-      return records;
+      const sheets = await readWorkbook(await file.arrayBuffer(),this.signal);
+      const parsed=parseSpreadsheet(sheets,{source:label});
+      this.diagnostics.push({source:label,method:'digital-workbook',sheets:parsed.diagnostics,duplicatePairs:parsed.duplicatePairs,records:parsed.records});
+      this.issues.push(...parsed.warnings);return parsed.records;
     }
     if (ext === 'pdf') return this.pdf(file, label);
     if (file.type.startsWith('image/') || /^(jpg|jpeg|png|webp|heic|heif|bmp|gif|tiff?)$/.test(ext)) {
-      const canvas = await imageFileToCanvas(file);
-      try { return await this.ocr(canvas, label); }
+      const canvas=await imageFileToCanvas(file);
+      try { this.ensureActive();this.diagnostics.push({source:label,method:'image-decode',...canvas.imageDiagnostics});return await this.ocr(canvas,label); }
       finally { canvas.width = canvas.height = 1; }
     }
     throw new Error('Nem támogatott formátum: ' + file.name);
   }
   async pdf(file, label = file.name) {
+    this.ensureActive();
     const pdfjs = await import('../vendor/pdf.min.mjs');
     pdfjs.GlobalWorkerOptions.workerSrc = asset('../vendor/pdf.worker.min.mjs');
     const task = pdfjs.getDocument({data: new Uint8Array(await file.arrayBuffer()), isEvalSupported: false, useSystemFonts: true});
@@ -136,6 +156,7 @@ export class DocumentImporter {
     try {
       if (doc.numPages > 150) throw new Error('Túl sok PDF-oldal (maximum 150). Bontsd több fájlra.');
       for (let n = 1; n <= doc.numPages; n++) {
+        this.ensureActive();
         const source = label + ' · ' + n + '. oldal';
         this.onStatus(source);
         let page, canvas, prepared;
@@ -172,7 +193,7 @@ export class DocumentImporter {
             if (hasImages) this.issues.push(source + ': képet tartalmazó PDF-oldal; ellenőrizd a szöveges és képi részek teljességét.');
           }
           if (!records.some(record => record.source === source)) this.issues.push(source + ': nem ismertünk fel párokat. Ellenőrizd a teljes oldalt.');
-        } catch (error) { this.issues.push(source + ': HIBA: ' + error.message); }
+        } catch (error) { if(error.name==='AbortError')throw error;this.issues.push(source+': HIBA: '+error.message); }
         finally {
           page?.cleanup(); if (canvas) canvas.width = canvas.height = 1;
           if (prepared) { prepared.canvas.width = prepared.canvas.height = 1; if (prepared.grayCanvas) prepared.grayCanvas.width = prepared.grayCanvas.height = 1; }
@@ -182,8 +203,8 @@ export class DocumentImporter {
     return records;
   }
   async close() {
-    if (this.worker) await this.worker.terminate();
-    this.worker = null; this.workerPromise = null;
+    const worker=this.worker;this.worker=null;this.workerPromise=null;
+    if(worker)await worker.terminate();
   }
   disposePreviews() { this.objectURLs.forEach(url => URL.revokeObjectURL(url)); this.objectURLs = []; this.previews.clear(); }
 }
@@ -223,14 +244,16 @@ function joinTextFragments(words) {
   return cells;
 }
 
-function readWorkbook(buffer) {
+function readWorkbook(buffer,signal) {
   return new Promise((resolve, reject) => {
     const worker = new Worker(asset('./workbook-worker.js'));
-    const finish = (error, sheets) => { clearTimeout(timeout); worker.terminate(); error ? reject(error) : resolve(sheets); };
+    const finish = (error, sheets) => { clearTimeout(timeout);signal?.removeEventListener('abort',onAbort);worker.terminate();error?reject(error):resolve(sheets); };
+    const onAbort=()=>finish(new DOMException('A feldolgozás megszakítva.','AbortError'));
     const timeout = setTimeout(() => finish(new Error('Az Excel feldolgozása túllépte a 20 másodperces időkorlátot. Bontsd kisebb munkafüzetekre.')), 20000);
     worker.onerror = () => finish(new Error('Az Excel-feldolgozó nem indítható vagy hibás fájlt kapott.'));
     worker.onmessage = ({data}) => data.error ? finish(new Error(data.error)) : finish(null, data.sheets);
-    worker.postMessage(buffer, [buffer]);
+    signal?.addEventListener('abort',onAbort,{once:true});
+    if(signal?.aborted)onAbort();else worker.postMessage(buffer,[buffer]);
   });
 }
 

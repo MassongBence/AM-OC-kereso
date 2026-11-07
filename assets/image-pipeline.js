@@ -3,7 +3,19 @@
  * This is a ruled-table detector, not a learned document model: missing borders,
  * severe perspective, folds and occluded text still require human review.
  */
-const MAX_SIDE = 2600;
+const MAX_SIDE = 4096;
+const MAX_PIXELS = 8_000_000;
+const GEOMETRY_SIDE = 2600;
+
+/** Canvas memory is bounded independently from aspect ratio. Original image
+ * bytes are not recompressed; this is a single documented resize budget. */
+export function imageDimensions(width,height,{maxSide=MAX_SIDE,maxPixels=MAX_PIXELS}={}) {
+  if(![width,height,maxSide,maxPixels].every(Number.isFinite)||width<=0||height<=0||maxSide<1||maxPixels<1)throw new Error('Érvénytelen képméret.');
+  const scale=Math.min(1,maxSide/Math.max(width,height),Math.sqrt(maxPixels/(width*height)));
+  let w=Math.max(1,Math.round(width*scale)),h=Math.max(1,Math.round(height*scale));
+  if(w*h>maxPixels){if(w>=h)w=Math.max(1,Math.floor(maxPixels/h));else h=Math.max(1,Math.floor(maxPixels/w));}
+  return {width:w,height:h,scaleX:w/width,scaleY:h/height};
+}
 
 function canvasOf(width, height) {
   const canvas = document.createElement('canvas');
@@ -12,36 +24,46 @@ function canvasOf(width, height) {
   return canvas;
 }
 
-function fittedCanvas(source, maxSide = MAX_SIDE) {
+function fittedCanvas(source, maxSide = MAX_SIDE, maxPixels = MAX_PIXELS) {
   const width = source.width || source.naturalWidth;
   const height = source.height || source.naturalHeight;
-  const scale = Math.min(1, maxSide / Math.max(width, height));
-  const canvas = canvasOf(width * scale, height * scale);
-  const context = canvas.getContext('2d', {willReadFrequently: true});
-  context.fillStyle = '#fff';
-  context.fillRect(0, 0, canvas.width, canvas.height);
-  context.drawImage(source, 0, 0, canvas.width, canvas.height);
+  const size=imageDimensions(width,height,{maxSide,maxPixels});
+  const canvas=canvasOf(size.width,size.height);
+  const context=canvas.getContext('2d',{willReadFrequently:true});
+  context.fillStyle='#fff';context.fillRect(0,0,canvas.width,canvas.height);
+  context.drawImage(source,0,0,canvas.width,canvas.height);
+  return canvas;
+}
+
+function decodedCanvas(image,file,route,options) {
+  const originalWidth=image.width||image.naturalWidth,originalHeight=image.height||image.naturalHeight;
+  const canvas=fittedCanvas(image,options.maxSide??MAX_SIDE,options.maxPixels??MAX_PIXELS);
+  canvas.imageDiagnostics={decoder:route,orientation:'browser-from-image',mimeType:file.type||'',fileBytes:file.size,
+    originalWidth,originalHeight,decodedWidth:canvas.width,decodedHeight:canvas.height,
+    scaleX:canvas.width/originalWidth,scaleY:canvas.height/originalHeight,
+    resized:canvas.width!==originalWidth||canvas.height!==originalHeight,jpegReencoded:false,
+    maxSide:options.maxSide??MAX_SIDE,maxPixels:options.maxPixels??MAX_PIXELS};
   return canvas;
 }
 
 /** Browser decoding applies EXIF orientation. Safari's Image fallback is needed
  * when createImageBitmap is unavailable or cannot decode a camera format. */
-export async function imageFileToCanvas(file) {
+export async function imageFileToCanvas(file, options = {}) {
   if (typeof createImageBitmap === 'function') {
     try {
       const bitmap = await createImageBitmap(file, {imageOrientation: 'from-image'});
-      try { return fittedCanvas(bitmap); } finally { bitmap.close(); }
+      try { return decodedCanvas(bitmap,file,'createImageBitmap',options); } finally { bitmap.close(); }
     } catch { /* Try the browser's image decoder before rejecting the file. */ }
   }
   const url = URL.createObjectURL(file);
   try {
     const image = new Image();
-    image.src = url;
     await new Promise((resolve, reject) => {
       image.onload = resolve;
       image.onerror = () => reject(new Error('A kép nem dekódolható. HEIC esetén exportáld JPEG vagy PNG formátumban.'));
+      image.src=url;
     });
-    return fittedCanvas(image);
+    return decodedCanvas(image,file,'HTMLImageElement',options);
   } finally { URL.revokeObjectURL(url); }
 }
 
@@ -419,12 +441,13 @@ export function perspectiveHomography(corners) {
 }
 
 /** Inverse mapping with bilinear interpolation: pixels are genuinely rectified. */
-export function warpPerspectivePixels(rgba,width,height,corners,maxSide=MAX_SIDE) {
+export function warpPerspectivePixels(rgba,width,height,corners,maxSide=MAX_SIDE,maxPixels=MAX_PIXELS) {
   const points=validatePerspectiveCorners(corners), distance=(a,b)=>Math.hypot((a.x-b.x)*(width-1),(a.y-b.y)*(height-1));
   let outputWidth=Math.max(2,Math.round((distance(points[0],points[1])+distance(points[3],points[2]))/2));
   let outputHeight=Math.max(2,Math.round((distance(points[0],points[3])+distance(points[1],points[2]))/2));
-  const scale=Math.min(1,maxSide/Math.max(outputWidth,outputHeight));
+  const scale=Math.min(1,maxSide/Math.max(outputWidth,outputHeight),Math.sqrt(maxPixels/(outputWidth*outputHeight)));
   outputWidth=Math.max(2,Math.round(outputWidth*scale));outputHeight=Math.max(2,Math.round(outputHeight*scale));
+  if(outputWidth*outputHeight>maxPixels){if(outputWidth>=outputHeight)outputWidth=Math.max(2,Math.floor(maxPixels/outputHeight));else outputHeight=Math.max(2,Math.floor(maxPixels/outputWidth));}
   const h=perspectiveHomography(points),output=new Uint8ClampedArray(outputWidth*outputHeight*4);
   for(let y=0;y<outputHeight;y++)for(let x=0;x<outputWidth;x++){
     const u=x/(outputWidth-1),v=y/(outputHeight-1),den=h[6]*u+h[7]*v+1;
@@ -491,6 +514,18 @@ export function detectPerspectiveQuad(binary,width,height) {
   return best;
 }
 
+/** Keep crop polygons in OCR pixels and topology x identifiers in their own
+ * lane coordinate system. Only logical y positions represent physical pixels. */
+export function scaleCellGeometry(cells,scaleX,scaleY) {
+  return cells.map(cell=>{
+    const result={...cell,x0:cell.x0*scaleX,x1:cell.x1*scaleX,y0:cell.y0*scaleY,y1:cell.y1*scaleY};
+    if(cell.polygon)result.polygon=cell.polygon.map(p=>({x:p.x*scaleX,y:p.y*scaleY}));
+    if(cell.pairingBounds)result.pairingBounds={...cell.pairingBounds,y0:cell.pairingBounds.y0*scaleY,y1:cell.pairingBounds.y1*scaleY};
+    for(const key of ['topRule','bottomRule'])if(cell[key])result[key]={...cell[key],y:cell[key].y*scaleY,leftY:cell[key].leftY*scaleY,rightY:cell[key].rightY*scaleY};
+    return result;
+  });
+}
+
 export async function prepareDocument(source, {rotation = 0, deskew = true, corners = null, perspective = true} = {}) {
   let canvas=fittedCanvas(source),perspectiveInfo={applied:false,mode:'none',corners:null};
   if(corners){
@@ -508,11 +543,26 @@ export async function prepareDocument(source, {rotation = 0, deskew = true, corn
   let angle=0;
   if(deskew){const sample=fittedCanvas(canvas,720);angle=estimateSkew(canvasBinary(sample),sample.width,sample.height);sample.width=sample.height=1;}
   if(angle){const previous=canvas;canvas=rotate(canvas,-angle);if(previous!==canvas)previous.width=previous.height=1;}
+  const dimensions={width:canvas.width,height:canvas.height};
+  const highResolution=Math.max(canvas.width,canvas.height)>GEOMETRY_SIDE;
+  if(highResolution){
+    // Detect topology on a smaller page, but crop each OCR cell from the
+    // retained source pixels. Local cell OCR performs grayscale normalization.
+    const geometry=fittedCanvas(canvas,GEOMETRY_SIDE),geometryWidth=geometry.width,geometryHeight=geometry.height;
+    const cells=scaleCellGeometry(detectCells(canvasBinary(geometry),geometryWidth,geometryHeight),canvas.width/geometryWidth,canvas.height/geometryHeight);
+    geometry.width=geometry.height=1;
+    return {canvas,grayCanvas:canvas,cells,angle,perspective:perspectiveInfo,
+      diagnostics:{input:source.imageDiagnostics||{originalWidth:source.width,originalHeight:source.height},prepared:dimensions,
+        geometry:{width:geometryWidth,height:geometryHeight,scaleToOcrX:canvas.width/geometryWidth,scaleToOcrY:canvas.height/geometryHeight},
+        ocr:{...dimensions,view:'source-with-cell-local-normalization'},cellCount:cells.length,laneCount:new Set(cells.filter(c=>c.laneId!=null).map(c=>c.laneId)).size,
+        angle,perspective:perspectiveInfo,jpegReencoded:false},
+      warnings:cells.length?[]:['Nem található megbízható cellaháló. A szöveg alapján javasolt párosításokat különösen ellenőrizd.']};
+  }
   const context=canvas.getContext('2d',{willReadFrequently:true}),pixels=context.getImageData(0,0,canvas.width,canvas.height);
   const grayCanvas=canvasOf(canvas.width,canvas.height),grayContext=grayCanvas.getContext('2d',{willReadFrequently:true}),grayImage=grayContext.createImageData(canvas.width,canvas.height);
   grayImage.data.set(contrastGrayscale(pixels.data,canvas.width,canvas.height));grayContext.putImageData(grayImage,0,0);
   const binary=adaptiveThreshold(pixels.data,canvas.width,canvas.height),cells=detectCells(binary,canvas.width,canvas.height),data=context.createImageData(canvas.width,canvas.height);
   for(let i=0;i<binary.length;i++){data.data[i*4]=data.data[i*4+1]=data.data[i*4+2]=binary[i]?0:255;data.data[i*4+3]=255;}
   context.putImageData(data,0,0);
-  return {canvas,grayCanvas,cells,angle,perspective:perspectiveInfo,warnings:cells.length?[]:['Nem található megbízható cellaháló. A szöveg alapján javasolt párosításokat különösen ellenőrizd.']};
+  return {canvas,grayCanvas,cells,angle,perspective:perspectiveInfo,diagnostics:{input:source.imageDiagnostics||{originalWidth:source.width,originalHeight:source.height},prepared:dimensions,geometry:{...dimensions,scaleToOcrX:1,scaleToOcrY:1},ocr:{...dimensions,view:'contrast-grayscale'},cellCount:cells.length,laneCount:new Set(cells.filter(c=>c.laneId!=null).map(c=>c.laneId)).size,angle,perspective:perspectiveInfo,jpegReencoded:false},warnings:cells.length?[]:['Nem található megbízható cellaháló. A szöveg alapján javasolt párosításokat különösen ellenőrizd.']};
 }

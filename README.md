@@ -64,6 +64,14 @@ dokumentációváltás előtt tölts le biztonsági mentést.
 - Excelben a tényleges cellák és deklarált összevonások adják a párosítás alapját.
   Az ismétlődő J-kódok helyei összeadódnak, az ismétlődő helyek egyszer szerepelnek.
   Üres, össze nem vont J-cella nem örökli automatikusan az előző sor J-kódját.
+  Az XLSX/XLS és CSV külön digitális feldolgozást használ, OCR-biztonsági küszöb
+  nélkül. Az oszlopfejlécek szerinti párosítás fordított oszlopsorrenddel is működik;
+  a kiegészítő helylisták és mennyiségi oszlopok nem válnak J-kódokká. A hiányos
+  vagy kétértelmű digitális kapcsolat ettől még bizonytalan marad.
+- Nagy fotón az OCR legfeljebb 4096 képpontos hosszabb oldalt és 8 millió pixelt
+  használ; a cellaháló külön, legfeljebb 2600 képpontos mintán készül és visszavetül
+  az OCR-képre. A 640 képpontos előnézet nem az OCR bemenete. A képet a feldolgozás
+  nem tömöríti újra JPEG-ként; a böngésző alkalmazza a tájolási metaadatot.
 - Fényképen automatikus négyszögkeresés, valódi projektív transzformáció
   (homográfia), kis szögű dőléskorrekció, kontrasztjavítás és adaptív küszöbölés
   készíti elő a táblázatot. Ha az automatikus igazítás nem elég, egy fotón a négy
@@ -108,6 +116,14 @@ A valódi eredményeket és korlátokat a [fotós mérési jelentés](docs/real-
 rögzíti. A legalább 95%-os teljes felismerési cél nincs teljesítettként feltüntetve.
 A [mérési útmutató](docs/ocr-evaluation.md) külön kezeli a nyers jelölteket és a
 ténylegesen automatikusan aktiválható adatokat.
+
+Az Excel- és kamerafolyamat további javításának külön eredményei és a hiányzó
+új iPhone-felvételek miatti korlátok: [importmérési jelentés](docs/digital-camera-import.md).
+A **Beolvasás adatai** alatt helyben letölthető a jelenlegi import fájllenyomata,
+képmérete, feldolgozási módja és összesítése. A jelentés nem tartalmaz fotópixeleket
+vagy felismert adatpárokat. A **Kijelölés törlése** a folyamatban levő importot is
+megszakítja, törli az előnézetet és az import gyorsítótárát; a későn beérkező
+korábbi eredmények nem jelennek meg az új importban.
 
 Ha a valós mintákon a helyi megoldás nem elegendő, további, tanított
 táblázatfelismerő megoldás összehasonlítása szükséges. Fizetős szolgáltatás vagy

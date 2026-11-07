@@ -33,3 +33,13 @@ test('a database with excessive entry count is rejected before parsing all rows'
   const value = Object.fromEntries(Array.from({length: 20001}, (_, i) => [`J${i}`, 'AM-OC-425']));
   assert.throws(() => validatedDatabase(value), /túl nagy/);
 });
+
+test('an aborted digital read cannot publish a late result',async()=>{
+ const {DocumentImporter}=await import('../assets/importers.js');
+ const controller=new AbortController();let release;
+ const content=new Promise(resolve=>{release=resolve;});
+ const importer=new DocumentImporter({signal:controller.signal});
+ const result=importer.read({name:'slow.csv',size:100,text:()=>content});
+ controller.abort();await assert.rejects(result,{name:'AbortError'});
+ release('J-kód;Hely\nJ001;AM-OC-429');await importer.close();
+});
