@@ -1,5 +1,5 @@
 import {pairRows, pairCells, parseCSV, parseText, normalizeKey, extractPlaces} from './table-core.js';
-import {suggestOcrText} from './ocr-suggestions.js';
+import {suggestOcrText, selectOcrHypothesis} from './ocr-suggestions.js';
 import {prepareDocument, imageFileToCanvas, assignWordsToCells} from './image-pipeline.js';
 
 const asset = path => new URL(path, import.meta.url).href;
@@ -35,9 +35,9 @@ export function validLocationList(value) {
 
 /** A single worker per batch bounds mobile memory. Every image/PDF is sequential. */
 export class DocumentImporter {
-  constructor({onStatus = () => {}, rotation = 0} = {}) {
-    this.onStatus = onStatus; this.rotation = rotation; this.worker = null; this.workerPromise = null;
-    this.previews = new Map(); this.issues = []; this.objectURLs = [];
+  constructor({onStatus = () => {}, rotation = 0, corners = null} = {}) {
+    this.onStatus = onStatus; this.rotation = rotation; this.corners = corners; this.worker = null; this.workerPromise = null;
+    this.previews = new Map(); this.issues = []; this.objectURLs = []; this.diagnostics = [];
   }
   async getWorker() {
     if (!this.workerPromise) this.workerPromise = (async () => {
@@ -61,7 +61,7 @@ export class DocumentImporter {
     const url = URL.createObjectURL(blob); this.objectURLs.push(url); this.previews.set(source, url);
   }
   async ocr(canvas, source) {
-    const prepared = await prepareDocument(canvas, {rotation: this.rotation});
+    const prepared = await prepareDocument(canvas, {rotation: this.rotation, corners: this.corners});
     try {
       this.issues.push(...prepared.warnings.map(w => source + ': ' + w));
       await this.savePreview(canvas, source);
@@ -70,21 +70,43 @@ export class DocumentImporter {
       if (prepared.cells.length) {
         if (prepared.cells.length > 500) throw new Error('Több mint 500 cella egy oldalon. Vágd kisebb táblázatokra.');
         cells = [];
-        await worker.setParameters({tessedit_pageseg_mode:'6'});
         for (let i=0; i<prepared.cells.length; i++) {
           const box = prepared.cells[i];
-          this.onStatus(source + ': cella ' + (i+1) + '/' + prepared.cells.length);
-          const inset = Math.min(6, (box.x1-box.x0)/10, (box.y1-box.y0)/10);
-          const width=Math.max(1,box.x1-box.x0-2*inset), height=Math.max(1,box.y1-box.y0-2*inset);
-          const crop=document.createElement('canvas'); crop.width=Math.ceil(width+24); crop.height=Math.ceil(height+24);
-          const context=crop.getContext('2d'); context.fillStyle='#fff'; context.fillRect(0,0,crop.width,crop.height);
-          context.drawImage(prepared.canvas,box.x0+inset,box.y0+inset,width,height,12,12,width,height);
-          try {
-            const result=await worker.recognize(crop,{}, {text:true});
-            const suggestion=suggestOcrText(result.data.text);
-            cells.push({...box,text:suggestion.text,confidence:result.data.confidence,reasons:suggestion.reasons,grid:true});
-          } finally { crop.width=crop.height=1; }
+          this.onStatus(source + ': cella ' + (i+1) + '/' + prepared.cells.length + ' · OCR-módszerek összehasonlítása');
+          const hypotheses=[];
+          const methods=[
+            {method:'threshold-block',variant:'threshold',canvas:prepared.canvas,psm:'6'},
+            {method:'gray-line',variant:'gray',canvas:prepared.grayCanvas || prepared.canvas,psm:'7'},
+          ];
+          const recognize=async method=> {
+            const crop=cropCellInk(method.canvas,box);
+            try {
+              await worker.setParameters({tessedit_pageseg_mode:method.psm});
+              const result=await worker.recognize(crop,{}, {blocks:true,text:true});
+              const words=result.data.words || result.data.blocks?.flatMap(block=>block.paragraphs?.flatMap(paragraph=>paragraph.lines?.flatMap(line=>line.words || []) || []) || []) || [];
+              const symbols=words.flatMap(word=>(word.symbols || []).map(symbol=>({text:symbol.text,confidence:symbol.confidence})));
+              hypotheses.push({method:method.method,variant:method.variant,text:result.data.text,confidence:result.data.confidence,symbols});
+            } finally { crop.width=crop.height=1; }
+          };
+          for (const method of methods) await recognize(method);
+          let selected=selectOcrHypothesis(hypotheses,{boundedCell:true});
+          // Do not silently pick the method yielding the most codes. A third
+          // method can recover a candidate, but conflicting codes stay uncertain.
+          if (!selected.evidence.reliable && /[JAMOC0-9]/i.test(selected.text)) {
+            await recognize({method:'gray-block',variant:'gray',canvas:prepared.grayCanvas || prepared.canvas,psm:'6'});
+            selected=selectOcrHypothesis(hypotheses,{boundedCell:true});
+          }
+          cells.push({...box,text:selected.text,confidence:selected.confidence,reasons:selected.reasons,
+            evidence:selected.evidence,grid:true});
         }
+        for (const method of ['threshold-block','gray-line','gray-block']) {
+          const methodCells=cells.map(cell=>{
+            const hypothesis=cell.evidence.hypotheses.find(item=>item.method===method);
+            return {...cell,text:hypothesis?.raw || '',confidence:hypothesis?.confidence || 0,reasons:[]};
+          });
+          this.diagnostics.push({source,method,reading:'raw-uncorrected',preprocessing:{angle:prepared.angle,perspective:prepared.perspective,cellCount:prepared.cells.length},records:pairCells(methodCells,{source,ocr:true})});
+        }
+
       } else {
         await worker.setParameters({tessedit_pageseg_mode:'11'});
         ({data} = await worker.recognize(prepared.canvas, {}, {blocks:true,text:true,tsv:true}));
@@ -92,10 +114,15 @@ export class DocumentImporter {
         cells=joinTextFragments(words);
       }
       let records=pairCells(cells,{source,ocr:true,inferred:!prepared.cells.length});
+      if (prepared.cells.length) records=attachConsensusEvidence(records,cells);
       // Text fallback remains explicitly uncertain; it invents no cell spans.
       if (!records.length && data?.text) records=parseText(data.text,{source}).map(row=>({...row,uncertain:true,reasons:[...row.reasons,'OCR: nem áll rendelkezésre megbízható cellaszerkezet.']}));
+      this.diagnostics.push({source,method:'cell-consensus',reading:'consensus-with-visible-suggestions',preprocessing:{angle:prepared.angle,perspective:prepared.perspective,cellCount:prepared.cells.length},records});
       return records;
-    } finally { prepared.canvas.width = prepared.canvas.height = 1; }
+    } finally {
+      prepared.canvas.width = prepared.canvas.height = 1;
+      if (prepared.grayCanvas) prepared.grayCanvas.width = prepared.grayCanvas.height = 1;
+    }
   }
   async read(file, {label = file.name} = {}) {
     const ext = file.name.split('.').pop().toLowerCase();
@@ -172,7 +199,7 @@ export class DocumentImporter {
         } catch (error) { this.issues.push(source + ': HIBA: ' + error.message); }
         finally {
           page?.cleanup(); if (canvas) canvas.width = canvas.height = 1;
-          if (prepared) prepared.canvas.width = prepared.canvas.height = 1;
+          if (prepared) { prepared.canvas.width = prepared.canvas.height = 1; if (prepared.grayCanvas) prepared.grayCanvas.width = prepared.grayCanvas.height = 1; }
         }
       }
     } finally { await doc.destroy(); }
@@ -229,4 +256,40 @@ function readWorkbook(buffer) {
     worker.onmessage = ({data}) => data.error ? finish(new Error(data.error)) : finish(null, data.sheets);
     worker.postMessage(buffer, [buffer]);
   });
+}
+
+/** Promote only an already unambiguous physical-cell match supported by clean
+ * consensus in both its J cell and its location cell. No nearest-y inheritance. */
+function attachConsensusEvidence(records,cells) {
+  return records.map(row=> {
+    const location=cells.find(cell=>cell.x0===row.bbox?.x0 && cell.y0===row.bbox?.y0 && cell.x1===row.bbox?.x1 && cell.y1===row.bbox?.y1);
+    const cy=location ? (location.y0+location.y1)/2 : 0;
+    const matches=location ? cells.filter(cell=>/^J\s*-?\s*\d{1,4}$/i.test(cell.text) && normalizeKey(cell.text)===row.key && cell.x1<=location.x0+1 && cy>=cell.y0 && cy<=cell.y1) : [];
+    const nearest=matches.length ? Math.max(...matches.map(cell=>cell.x1)) : -Infinity;
+    const keys=matches.filter(cell=>Math.abs(cell.x1-nearest)<=1);
+    const geometrySafe=Boolean(row.key) && row.reasons.every(reason=>reason==='OCR: ellenőrizd az eredeti dokumentumon.');
+    const reliable=geometrySafe && location?.evidence?.reliable && keys.length>0 && keys.every(key=>key.evidence?.reliable);
+    return {...row,uncertain:!reliable,reasons:reliable ? [] : row.reasons,
+      evidence:{reliable:Boolean(reliable),method:'cell-consensus',location:location?.evidence || null,keys:keys.map(key=>key.evidence)}};
+  });
+}
+
+/** Remove unused interior margins after excluding cell borders. This improves
+ * character segmentation without modifying the actual cell's pairing extent. */
+function cropCellInk(source,box) {
+  const inset=Math.min(6,(box.x1-box.x0)/10,(box.y1-box.y0)/10);
+  const width=Math.max(1,Math.floor(box.x1-box.x0-2*inset)),height=Math.max(1,Math.floor(box.y1-box.y0-2*inset));
+  const cut=document.createElement('canvas'); cut.width=width;cut.height=height;
+  const context=cut.getContext('2d',{willReadFrequently:true}); context.drawImage(source,box.x0+inset,box.y0+inset,width,height,0,0,width,height);
+  const pixels=context.getImageData(0,0,width,height).data;
+  let x0=width,y0=height,x1=0,y1=0;
+  for(let y=0;y<height;y++) for(let x=0;x<width;x++) if(pixels[(y*width+x)*4]<120) {
+    x0=Math.min(x0,x);y0=Math.min(y0,y);x1=Math.max(x1,x+1);y1=Math.max(y1,y+1);
+  }
+  if(x1<=x0 || y1<=y0){x0=0;y0=0;x1=width;y1=height;}
+  const factor=Math.min(2,Math.max(1,80/(y1-y0)),1800/(x1-x0));
+  const crop=document.createElement('canvas');crop.width=Math.ceil((x1-x0)*factor+32);crop.height=Math.ceil((y1-y0)*factor+32);
+  const target=crop.getContext('2d');target.fillStyle='#fff';target.fillRect(0,0,crop.width,crop.height);
+  target.drawImage(cut,x0,y0,x1-x0,y1-y0,16,16,(x1-x0)*factor,(y1-y0)*factor);
+  cut.width=cut.height=1;return crop;
 }

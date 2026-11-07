@@ -64,7 +64,7 @@ export function pairRows(rows, {merges = [], source = ''} = {}) {
   // numbers, etc.) must not become J keys merely because they contain digits.
   const keyColumns = new Set();
   expanded.forEach(row => row.forEach((text, col) => {
-    if (/^J\s*-?\s*\d{1,4}$/i.test(text) || /^J\s*[-–]?\s*(?:kód|code)$/i.test(text)) keyColumns.add(col);
+    if (/^J\s*-?\s*\d{1,4}$/i.test(text) || /^J(?:[\s_-]*(?:k[oó]d|code))?$/i.test(text)) keyColumns.add(col);
   }));
   const output = [];
   expanded.forEach((row, rowIndex) => {

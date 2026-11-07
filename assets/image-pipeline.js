@@ -192,24 +192,156 @@ export function assignWordsToCells(words, cells) {
   return output.concat(orphans);
 }
 
-export async function prepareDocument(source, {rotation = 0, deskew = true} = {}) {
-  let canvas = fittedCanvas(source);
-  if (rotation) canvas = rotate(canvas, rotation);
-  let angle = 0;
-  if (deskew) {
-    const sample = fittedCanvas(canvas, 720);
-    angle = estimateSkew(canvasBinary(sample), sample.width, sample.height);
-    sample.width = sample.height = 1;
+/** Contrast-stretched grayscale is an independent OCR view, not a binary copy. */
+export function contrastGrayscale(rgba, width, height) {
+  const gray = new Uint8ClampedArray(width * height), histogram = new Uint32Array(256);
+  for (let i=0; i<gray.length; i++) {
+    const p=i*4, alpha=rgba[p+3]/255;
+    gray[i]=Math.round((rgba[p]*.299+rgba[p+1]*.587+rgba[p+2]*.114)*alpha+255*(1-alpha));
+    histogram[gray[i]]++;
   }
-  if (angle) canvas = rotate(canvas, -angle);
-  const binary = canvasBinary(canvas);
-  const cells = detectCells(binary, canvas.width, canvas.height);
-  const context = canvas.getContext('2d', {willReadFrequently: true});
-  const data = context.createImageData(canvas.width, canvas.height);
-  for (let i = 0; i < binary.length; i++) {
-    data.data[i * 4] = data.data[i * 4 + 1] = data.data[i * 4 + 2] = binary[i] ? 0 : 255;
-    data.data[i * 4 + 3] = 255;
+  let count=0,low=0,high=255;
+  for (let i=0;i<256;i++) { count+=histogram[i]; if (count>=gray.length*.01) {low=i;break;} }
+  count=0;
+  for (let i=255;i>=0;i--) {count+=histogram[i];if(count>=gray.length*.01){high=i;break;}}
+  if(high-low<32){low=0;high=255;}
+  const output=new Uint8ClampedArray(rgba.length), span=high-low;
+  for (let i=0;i<gray.length;i++) {
+    const value=Math.max(0,Math.min(255,Math.round((gray[i]-low)*255/span)));
+    output[i*4]=output[i*4+1]=output[i*4+2]=value;output[i*4+3]=255;
   }
-  context.putImageData(data, 0, 0);
-  return {canvas, cells, angle, warnings: cells.length ? [] : ['Nem található megbízható cellaháló. A szöveg alapján javasolt párosításokat különösen ellenőrizd.']};
+  return output;
+}
+
+/** Clockwise TL/TR/BR/BL normalized corners; reject crossed or tiny quadrilaterals. */
+export function validatePerspectiveCorners(corners) {
+  if (!Array.isArray(corners)||corners.length!==4||corners.some(p=>!p||!Number.isFinite(p.x)||!Number.isFinite(p.y)||p.x<0||p.x>1||p.y<0||p.y>1)) throw new Error('A perspektívakorrekcióhoz négy, a képen belüli sarok szükséges.');
+  const result=corners.map(p=>({x:p.x,y:p.y}));
+  let area=0;
+  for (let i=0;i<4;i++) {
+    const a=result[i],b=result[(i+1)%4],c=result[(i+2)%4];
+    const cross=(b.x-a.x)*(c.y-b.y)-(b.y-a.y)*(c.x-b.x);
+    if (cross<=.0001) throw new Error('A sarkok sorrendje: bal felső, jobb felső, jobb alsó, bal alsó. A négyszög nem keresztezheti önmagát.');
+    area+=a.x*b.y-b.x*a.y;
+  }
+  if (area/2<.025) throw new Error('Túl kicsi a kijelölt dokumentum.');
+  return result;
+}
+
+/** Solve a projective mapping from a unit output rectangle to the input quad. */
+export function perspectiveHomography(corners) {
+  const points=validatePerspectiveCorners(corners), uv=[[0,0],[1,0],[1,1],[0,1]], matrix=[];
+  for (let i=0;i<4;i++) {
+    const [u,v]=uv[i],{x,y}=points[i];
+    matrix.push([u,v,1,0,0,0,-u*x,-v*x,x]);
+    matrix.push([0,0,0,u,v,1,-u*y,-v*y,y]);
+  }
+  for (let col=0;col<8;col++) {
+    let pivot=col;
+    for(let row=col+1;row<8;row++)if(Math.abs(matrix[row][col])>Math.abs(matrix[pivot][col]))pivot=row;
+    if(Math.abs(matrix[pivot][col])<1e-10)throw new Error('Nem számítható a perspektívakorrekció.');
+    [matrix[pivot],matrix[col]]=[matrix[col],matrix[pivot]];
+    const scale=matrix[col][col];for(let n=col;n<9;n++)matrix[col][n]/=scale;
+    for(let row=0;row<8;row++)if(row!==col){const f=matrix[row][col];for(let n=col;n<9;n++)matrix[row][n]-=f*matrix[col][n];}
+  }
+  return matrix.map(row=>row[8]);
+}
+
+/** Inverse mapping with bilinear interpolation: pixels are genuinely rectified. */
+export function warpPerspectivePixels(rgba,width,height,corners,maxSide=MAX_SIDE) {
+  const points=validatePerspectiveCorners(corners), distance=(a,b)=>Math.hypot((a.x-b.x)*(width-1),(a.y-b.y)*(height-1));
+  let outputWidth=Math.max(2,Math.round((distance(points[0],points[1])+distance(points[3],points[2]))/2));
+  let outputHeight=Math.max(2,Math.round((distance(points[0],points[3])+distance(points[1],points[2]))/2));
+  const scale=Math.min(1,maxSide/Math.max(outputWidth,outputHeight));
+  outputWidth=Math.max(2,Math.round(outputWidth*scale));outputHeight=Math.max(2,Math.round(outputHeight*scale));
+  const h=perspectiveHomography(points),output=new Uint8ClampedArray(outputWidth*outputHeight*4);
+  for(let y=0;y<outputHeight;y++)for(let x=0;x<outputWidth;x++){
+    const u=x/(outputWidth-1),v=y/(outputHeight-1),den=h[6]*u+h[7]*v+1;
+    const sx=Math.max(0,Math.min(width-1,(h[0]*u+h[1]*v+h[2])/den*(width-1)));
+    const sy=Math.max(0,Math.min(height-1,(h[3]*u+h[4]*v+h[5])/den*(height-1)));
+    const x0=Math.floor(sx),y0=Math.floor(sy),x1=Math.min(width-1,x0+1),y1=Math.min(height-1,y0+1),dx=sx-x0,dy=sy-y0,p=(y*outputWidth+x)*4;
+    for(let channel=0;channel<3;channel++)output[p+channel]=rgba[(y0*width+x0)*4+channel]*(1-dx)*(1-dy)+rgba[(y0*width+x1)*4+channel]*dx*(1-dy)+rgba[(y1*width+x0)*4+channel]*(1-dx)*dy+rgba[(y1*width+x1)*4+channel]*dx*dy;
+    output[p+3]=255;
+  }
+  return {data:output,width:outputWidth,height:outputHeight};
+}
+
+function perspectiveCanvas(source,corners) {
+  const context=source.getContext('2d',{willReadFrequently:true});
+  const pixels=context.getImageData(0,0,source.width,source.height);
+  const warped=warpPerspectivePixels(pixels.data,source.width,source.height,corners);
+  const output=canvasOf(warped.width,warped.height),outContext=output.getContext('2d',{willReadFrequently:true});
+  const image=outContext.createImageData(warped.width,warped.height);image.data.set(warped.data);outContext.putImageData(image,0,0);
+  return output;
+}
+
+/** Conservative line-based quad detector. It requires four strongly supported
+ * ruled edges; no page boundary or missing corner is fabricated from text. */
+export function detectPerspectiveQuad(binary,width,height) {
+  const points=[];
+  for(let y=0;y<height;y+=2)for(let x=0;x<width;x+=2)if(binary[y*width+x])points.push([x,y]);
+  if(points.length<150)return null;
+  function lines(vertical) {
+    const extent=vertical?width:height,along=vertical?height:width,pad=Math.ceil(along*.4), candidates=[];
+    for(let degree=-18;degree<=18;degree+=1){
+      const slope=Math.tan(degree*Math.PI/180),hist=new Uint32Array(extent+pad*2);
+      for(const [x,y]of points){const b=Math.round((vertical?x:y)-slope*(vertical?y:x))+pad;if(b>=0&&b<hist.length)hist[b]++;}
+      for(let b=2;b<hist.length-2;b++)if(hist[b]>=Math.max(15,along*.12)&&hist[b]>=hist[b-1]&&hist[b]>=hist[b+1]){
+        const intercept=b-pad,center=intercept+slope*along/2;
+        if(center>extent*.01&&center<extent*.99)candidates.push({slope,intercept,center,score:hist[b]});
+      }
+    }
+    candidates.sort((a,b)=>b.score-a.score);
+    const distinct=[];
+    for(const candidate of candidates)if(!distinct.some(line=>Math.abs(line.center-candidate.center)<6)){distinct.push(candidate);if(distinct.length===10)break;}
+    return distinct.sort((a,b)=>a.center-b.center);
+  }
+  const horizontal=lines(false),vertical=lines(true);
+  if(horizontal.length<2||vertical.length<2)return null;
+  const intersect=(h,v)=>{const x=(v.intercept+v.slope*h.intercept)/(1-v.slope*h.slope);return{x,y:h.intercept+h.slope*x};};
+  function support(a,b){let ink=0;const samples=120;for(let i=0;i<=samples;i++){const x=Math.round(a.x+(b.x-a.x)*i/samples),y=Math.round(a.y+(b.y-a.y)*i/samples);let found=false;for(let yy=Math.max(0,y-2);yy<=Math.min(height-1,y+2)&&!found;yy++)for(let xx=Math.max(0,x-2);xx<=Math.min(width-1,x+2);xx++)if(binary[yy*width+xx]){found=true;break;}if(found)ink++;}return ink/(samples+1);}
+  let best=null;
+  for(let top=0;top<horizontal.length-1;top++)for(let bottom=top+1;bottom<horizontal.length;bottom++){
+    if(horizontal[bottom].center-horizontal[top].center<height*.4)continue;
+    for(let left=0;left<vertical.length-1;left++)for(let right=left+1;right<vertical.length;right++){
+      if(vertical[right].center-vertical[left].center<width*.4)continue;
+      const quad=[intersect(horizontal[top],vertical[left]),intersect(horizontal[top],vertical[right]),intersect(horizontal[bottom],vertical[right]),intersect(horizontal[bottom],vertical[left])];
+      if(quad.some(p=>p.x<0||p.x>width-1||p.y<0||p.y>height-1))continue;
+      const normalized=quad.map(p=>({x:p.x/(width-1),y:p.y/(height-1)}));
+      try{validatePerspectiveCorners(normalized);}catch{continue;}
+      let area=0;for(let i=0;i<4;i++)area+=quad[i].x*quad[(i+1)%4].y-quad[(i+1)%4].x*quad[i].y;area/=2;
+      if(area<width*height*.25)continue;
+      const quality=Math.min(...quad.map((p,i)=>support(p,quad[(i+1)%4])));
+      if(quality<.86)continue;
+      const score=area*quality;
+      if(!best||score>best.score)best={corners:normalized,score,quality};
+    }
+  }
+  return best;
+}
+
+export async function prepareDocument(source, {rotation = 0, deskew = true, corners = null, perspective = true} = {}) {
+  let canvas=fittedCanvas(source),perspectiveInfo={applied:false,mode:'none',corners:null};
+  if(corners){
+    const validated=validatePerspectiveCorners(corners),previous=canvas;canvas=perspectiveCanvas(canvas,validated);previous.width=previous.height=1;
+    perspectiveInfo={applied:true,mode:'manual',corners:validated};
+  }else if(perspective&&deskew){
+    const sample=fittedCanvas(canvas,720),quad=detectPerspectiveQuad(canvasBinary(sample),sample.width,sample.height);sample.width=sample.height=1;
+    if(quad){
+      const q=quad.corners,dx=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y),top=dx(q[0],q[1]),bottom=dx(q[3],q[2]),left=dx(q[0],q[3]),right=dx(q[1],q[2]);
+      // Pure rotation is handled by deskew; avoid resampling an already flat grid.
+      if(Math.max(top/bottom,bottom/top,left/right,right/left)>1.045){const previous=canvas;canvas=perspectiveCanvas(canvas,q);previous.width=previous.height=1;perspectiveInfo={applied:true,mode:'auto',corners:q,edgeSupport:quad.quality};}
+    }
+  }
+  if(rotation){const previous=canvas;canvas=rotate(canvas,rotation);if(previous!==canvas)previous.width=previous.height=1;}
+  let angle=0;
+  if(deskew){const sample=fittedCanvas(canvas,720);angle=estimateSkew(canvasBinary(sample),sample.width,sample.height);sample.width=sample.height=1;}
+  if(angle){const previous=canvas;canvas=rotate(canvas,-angle);if(previous!==canvas)previous.width=previous.height=1;}
+  const context=canvas.getContext('2d',{willReadFrequently:true}),pixels=context.getImageData(0,0,canvas.width,canvas.height);
+  const grayCanvas=canvasOf(canvas.width,canvas.height),grayContext=grayCanvas.getContext('2d',{willReadFrequently:true}),grayImage=grayContext.createImageData(canvas.width,canvas.height);
+  grayImage.data.set(contrastGrayscale(pixels.data,canvas.width,canvas.height));grayContext.putImageData(grayImage,0,0);
+  const binary=adaptiveThreshold(pixels.data,canvas.width,canvas.height),cells=detectCells(binary,canvas.width,canvas.height),data=context.createImageData(canvas.width,canvas.height);
+  for(let i=0;i<binary.length;i++){data.data[i*4]=data.data[i*4+1]=data.data[i*4+2]=binary[i]?0:255;data.data[i*4+3]=255;}
+  context.putImageData(data,0,0);
+  return {canvas,grayCanvas,cells,angle,perspective:perspectiveInfo,warnings:cells.length?[]:['Nem található megbízható cellaháló. A szöveg alapján javasolt párosításokat különösen ellenőrizd.']};
 }
