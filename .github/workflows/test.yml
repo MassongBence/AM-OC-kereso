@@ -1,0 +1,34 @@
+name: Tests
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - name: Verify vendored runtime dependencies
+        run: |
+          npm run vendor
+          git diff --exit-code -- vendor/
+      - name: Install test browser
+        run: npx playwright install --with-deps chromium
+      - name: Browser imports, OCR and GitHub Pages path
+        run: |
+          export CHROMIUM_PATH="$(node --input-type=module -e 'import { chromium } from "playwright"; process.stdout.write(chromium.executablePath());')"
+          npm run test:browser
