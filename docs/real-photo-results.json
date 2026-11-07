@@ -1,0 +1,168 @@
+{
+  "schemaVersion": 1,
+  "reference": {
+    "kind": "real",
+    "pairs": 251,
+    "keys": 188,
+    "photoPairs": [
+      85,
+      166
+    ],
+    "sourceHashes": [
+      {
+        "name": "foto_1.jpg",
+        "sha256": "eed5fb67128991a8d0edbdf8383dd11d1c7ee3247513088a58b7baab309b1e1f"
+      },
+      {
+        "name": "foto_2.jpg",
+        "sha256": "72de993b0e199cef75bd1904876c9794c1603ef6da8c554f8cddc396657cbc20"
+      }
+    ],
+    "review": "two-pass-manual plus independent recertification of all 13 disagreements"
+  },
+  "excel": {
+    "pairs": 251,
+    "sharedWithPhotos": 238,
+    "photoOnly": 13,
+    "excelOnly": 13,
+    "affectedKeys": 16
+  },
+  "before": {
+    "baseCommit": "af0811b",
+    "elapsedMs": 78750,
+    "candidates": {
+      "referencePairs": 251,
+      "predictedPairs": 114,
+      "truePositive": 94,
+      "falseNegative": 157,
+      "falsePositive": 20,
+      "precision": 0.8245614035087719,
+      "recall": 0.3745019920318725,
+      "correctPairingRate": 0.34686346863468637,
+      "invalidCandidates": 58
+    },
+    "automatic": {
+      "referencePairs": 251,
+      "predictedPairs": 23,
+      "truePositive": 22,
+      "falseNegative": 229,
+      "falsePositive": 1,
+      "precision": 0.9565217391304348,
+      "recall": 0.08764940239043825,
+      "correctPairingRate": 0.0873015873015873,
+      "invalidCandidates": 0
+    }
+  },
+  "after": {
+    "elapsedMs": 103478,
+    "candidates": {
+      "referencePairs": 251,
+      "predictedPairs": 231,
+      "truePositive": 225,
+      "falseNegative": 26,
+      "falsePositive": 6,
+      "precision": 0.974025974025974,
+      "recall": 0.896414342629482,
+      "correctPairingRate": 0.8754863813229572,
+      "invalidCandidates": 28
+    },
+    "automatic": {
+      "referencePairs": 251,
+      "predictedPairs": 103,
+      "truePositive": 103,
+      "falseNegative": 148,
+      "falsePositive": 0,
+      "precision": 1,
+      "recall": 0.4103585657370518,
+      "correctPairingRate": 0.4103585657370518,
+      "invalidCandidates": 0
+    },
+    "sourceSha256": {
+      "assets/image-pipeline.js": "42ea2a036504496dd20114702d73f4a4584248b67eebbc1d19f82c707815a744",
+      "assets/cell-ocr.js": "1c3636b075437b83c02b544b541edd5a182055e289c59c1908d2a8b5bd5ab402",
+      "assets/table-core.js": "dc22d4234f74b7f5f1e48498820498be1b77eda5d9419083fcce96fe19930383",
+      "assets/importers.js": "f8b242904d1aec230113638ae65ba24ac3777d95e42d1fbc83d410fbd4405398"
+    }
+  },
+  "photos": {
+    "foto_1.jpg": {
+      "referencePairs": 85,
+      "before": {
+        "referencePairs": 85,
+        "predictedPairs": 51,
+        "truePositive": 43,
+        "falseNegative": 42,
+        "falsePositive": 8,
+        "precision": 0.8431372549019608,
+        "recall": 0.5058823529411764,
+        "correctPairingRate": 0.46236559139784944,
+        "invalidCandidates": 25
+      },
+      "after": {
+        "referencePairs": 85,
+        "predictedPairs": 83,
+        "truePositive": 83,
+        "falseNegative": 2,
+        "falsePositive": 0,
+        "precision": 1,
+        "recall": 0.9764705882352941,
+        "correctPairingRate": 0.9764705882352941,
+        "invalidCandidates": 3
+      },
+      "automaticWhenImportedSeparately": {
+        "referencePairs": 85,
+        "predictedPairs": 43,
+        "truePositive": 43,
+        "falseNegative": 42,
+        "falsePositive": 0,
+        "precision": 1,
+        "recall": 0.5058823529411764,
+        "correctPairingRate": 0.5058823529411764,
+        "invalidCandidates": 0
+      }
+    },
+    "foto_2.jpg": {
+      "referencePairs": 166,
+      "before": {
+        "referencePairs": 166,
+        "predictedPairs": 63,
+        "truePositive": 51,
+        "falseNegative": 115,
+        "falsePositive": 12,
+        "precision": 0.8095238095238095,
+        "recall": 0.3072289156626506,
+        "correctPairingRate": 0.28651685393258425,
+        "invalidCandidates": 33
+      },
+      "after": {
+        "referencePairs": 166,
+        "predictedPairs": 148,
+        "truePositive": 142,
+        "falseNegative": 24,
+        "falsePositive": 6,
+        "precision": 0.9594594594594594,
+        "recall": 0.8554216867469879,
+        "correctPairingRate": 0.8255813953488372,
+        "invalidCandidates": 25
+      },
+      "automaticWhenImportedSeparately": {
+        "referencePairs": 166,
+        "predictedPairs": 60,
+        "truePositive": 60,
+        "falseNegative": 106,
+        "falsePositive": 0,
+        "precision": 1,
+        "recall": 0.3614457831325301,
+        "correctPairingRate": 0.3614457831325301,
+        "invalidCandidates": 0
+      }
+    }
+  },
+  "realTarget": {
+    "established": false,
+    "scope": "Only the supplied, manually checked input corpus; not general OCR accuracy.",
+    "blockers": [
+      "The precision, recall and exact pairing rate do not all meet the threshold."
+    ]
+  }
+}

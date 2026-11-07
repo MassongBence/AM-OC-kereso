@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {analyzeCellInk,glyphScale,thresholdResampledInk,stretchCellGray,needsNumericKeyRetry} from '../assets/cell-ocr.js';
+import {analyzeCellInk,glyphScale,thresholdResampledInk,stretchCellGray,needsNumericKeyRetry,recognizePreparedCell} from '../assets/cell-ocr.js';
 
 function image(width,height,background=220){const data=new Uint8ClampedArray(width*height*4);for(let i=0;i<width*height;i++){data[i*4]=data[i*4+1]=data[i*4+2]=background;data[i*4+3]=255;}return data;}
 function ink(data,width,x0,y0,x1,y1,value=35){for(let y=y0;y<y1;y++)for(let x=x0;x<x1;x++){const p=(y*width+x)*4;data[p]=data[p+1]=data[p+2]=value;}}
@@ -55,4 +55,51 @@ test('border analysis never modifies source pixels or amputates an attached digi
  assert.equal(result.gray[13*width+84],35,'a touching digit remains real ink, not paper');
  assert.ok(result.bounds.x1>=86&&result.bounds.y1>=24,'crop retains the complete touching character');
  assert.ok(!result.removed.some(r=>r.x0<=84&&r.x1>84&&r.y0<=13&&r.y1>13),'no broad erased bounding box may cover digit strokes');
+});
+
+
+const preparedViews={gray:{variant:'gray'},threshold:{variant:'threshold'},glyphHeight:12,scale:5};
+function workerStub(reading) {
+ const calls=[];let parameters={};
+ return {calls,async setParameters(values){parameters={...parameters,...values};},async recognize(canvas){
+   const call={variant:canvas.variant,psm:parameters.tessedit_pageseg_mode,whitelist:parameters.tessedit_char_whitelist};calls.push(call);
+   const text=reading(call),symbols=[...text].filter(c=>!/\s/.test(c)).map(text=>({text,confidence:99}));
+   return {data:{text,confidence:95,words:[{symbols}]}};
+ }};
+}
+test('raw-line retry leaves an already corroborated cell frozen',async()=>{
+ const worker=workerStub(()=> 'AM-OC-627');
+ const result=await recognizePreparedCell(worker,preparedViews,{column:1});
+ assert.equal(result.text,'AM-OC-627');assert.equal(result.evidence.reliable,true);
+ assert.deepEqual(worker.calls.map(c=>c.psm),['7','6']);
+});
+test('unresolved code gets unrestricted raw-line gray and threshold readings before any whitelist',async()=>{
+ const worker=workerStub(call=>call.psm==='13'?'J056':'JOS6');
+ const result=await recognizePreparedCell(worker,preparedViews,{column:0});
+ assert.equal(result.text,'J056');assert.equal(result.evidence.reliable,true);
+ assert.deepEqual(worker.calls.map(c=>c.psm),['7','6','6','13','13']);
+ assert.ok(worker.calls.every(c=>c.whitelist===''),'raw-line retry must not constrain the answer');
+});
+test('raw-line retry never inserts a missing J or converts foreign namespace disagreement into trusted data',async()=>{
+ const missing=workerStub(()=> '056');
+ const first=await recognizePreparedCell(missing,preparedViews,{column:0});
+ assert.equal(first.evidence.reliable,false);assert.notEqual(first.text,'J056');
+ assert.ok(missing.calls.every(c=>c.whitelist===''),'a missing literal J cannot trigger numeric field repair');
+ const foreign=workerStub(call=>call.psm==='13'?'AM-OC-604':'FR-OC-604');
+ // A consistent excluded namespace does not need any retry.
+ const second=await recognizePreparedCell(foreign,preparedViews,{column:1});
+ assert.equal(second.evidence.reliable,false);assert.equal(foreign.calls.length,2);
+ const disagreement=workerStub(call=>call.variant==='threshold'&&call.psm==='6'?'FR-OC-604':call.psm==='13'?'AM-OC-604':'AM-OC-6O4');
+ const third=await recognizePreparedCell(disagreement,preparedViews,{column:1});
+ assert.equal(third.text,'AM-OC-604');assert.equal(third.evidence.reliable,false);
+ assert.equal(third.evidence.foreignConflict,true);
+});
+
+test('a short numeral at a crop edge is not classified as a full-height rule',()=>{
+ const width=60,height=24,data=image(width,height);
+ ink(data,width,0,3,2,21);ink(data,width,20,4,26,20);
+ const result=analyzeCellInk(data,width,height);
+ assert.equal(result.bounds.x0,0,'the left digit remains inside the OCR crop');
+ assert.ok(result.bounds.y1>=21);
+ assert.equal(result.gray[10*width],35);
 });

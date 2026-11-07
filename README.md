@@ -73,6 +73,13 @@ dokumentációváltás előtt tölts le biztonsági mentést.
 - A cellahatárok oszloponként kerülnek felismerésre, így egy több sor magas
   J-cella teljes tartománya párosítható több szomszédos AM–OC cellához. A rendszer
   nem kizárólag a szövegsorok azonos magasságára támaszkodik.
+- A görbült táblázatvonalakat helyi, összefüggő cellabelsők és külön oszlopnyomok
+  követik. A margók és a táblázatok közti rések nem válnak adatsorrá. A fizikai
+  képkivágás és a közös osztóvonalon mért logikai cellatartomány külön megmarad.
+- A keretfelismerés mérési maszkot készít, nem festi fehérre az egész folt
+  befoglaló téglalapját. Így a kerethez érő számjegy sem törlődik. A szürke
+  betűk helyi kontrasztjavítást és betűméret szerinti nagyítást kapnak a
+  küszöbölés előtt; bizonytalan olvasatnál nyerssor-mód is próbálkozik.
 - A cellák több helyi OCR-változaton mennek át: küszöbölt képen blokkfelismerés,
   szürkeárnyalatos képen sorfelismerés, szükség esetén további blokkfelismerés.
   A módszerek olvasata és biztonsági értéke összehasonlításra kerül. Egymással
@@ -94,12 +101,13 @@ változat egyetértése sem helyettesítik a teljes valódi referencia mérésé
 Erős perspektíva, gyűrődés, hiányzó rács, elmosódás vagy takart szöveg továbbra is
 felismerési hibát okozhat.
 
-A felhasználó által említett valódi táblázatfotó nem érkezett meg a fejlesztési
-munkaterületre. A legalább 95%-os helyes párosítási cél ezért jelenleg **nincs
-valódi dokumentumon megmérve és nincs igazolva**. Az ellenőrzött referencia,
-a helyes/hiányzó/téves párok és a módszerenkénti összehasonlítás menetét a
-[felismerés mérési útmutatója](docs/ocr-evaluation.md) írja le. Szintetikus
-regressziós példát nem szabad valódi fotós eredményként feltüntetni.
+Két valódi dokumentumfotó és a hozzájuk adott Excel összevetése megtörtént.
+A fotókon 251 egyedi pár van; az Excellel 238 egyezik, és 13 pár eltér mindkét
+irányban. A fotókból külön, kétszeri vizuális átírással készült referencia.
+A valódi eredményeket és korlátokat a [fotós mérési jelentés](docs/real-photo-evaluation.md)
+rögzíti. A legalább 95%-os teljes felismerési cél nincs teljesítettként feltüntetve.
+A [mérési útmutató](docs/ocr-evaluation.md) külön kezeli a nyers jelölteket és a
+ténylegesen automatikusan aktiválható adatokat.
 
 Ha a valós mintákon a helyi megoldás nem elegendő, további, tanított
 táblázatfelismerő megoldás összehasonlítása szükséges. Fizetős szolgáltatás vagy

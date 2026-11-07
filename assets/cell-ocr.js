@@ -105,30 +105,50 @@ export function prepareCellViews(source,box) {
 const foreign=text=>/^(?:A|C)[\s-]*DR\b|^(?:CH|FR)[\s-]*OC\b/i.test(String(text).trim());
 function symbolsFrom(data){const words=data.words||data.blocks?.flatMap(b=>b.paragraphs?.flatMap(p=>p.lines?.flatMap(l=>l.words||[])||[])||[])||[];return words.flatMap(word=>(word.symbols||[]).map(s=>({text:s.text,confidence:s.confidence})));}
 
-/** Two high-resolution views are the normal path; use a third segmentation
- * only for unresolved code-like print, never a lookup of known J/location IDs. */
-export async function recognizeCell(worker,views,box,{onStatus=()=>{}}={}) {
-  const prepared=prepareCellViews(views.grayCanvas||views.canvas,box),started=performance.now();
-  if(!prepared)return {...box,text:'',confidence:0,reasons:[],evidence:{reliable:false,kind:'',hypotheses:[],blank:true}};
-  const hypotheses=[];
-  try{
-    const recognize=async(method,variant,canvas,psm,whitelist='')=>{onStatus(method);await worker.setParameters({tessedit_pageseg_mode:psm,tessedit_char_whitelist:whitelist});const {data}=await worker.recognize(canvas,{}, {blocks:true,text:true});hypotheses.push({method,variant,text:data.text,confidence:data.confidence,symbols:symbolsFrom(data)});};
-    await recognize('gray-hires-line','gray',prepared.gray,'7');
-    await recognize('local-threshold-hires-block','threshold',prepared.threshold,'6');
-    let selected=selectOcrHypothesis(hypotheses,{boundedCell:true});
-    const allForeign=hypotheses.every(h=>foreign(h.text));
-    if(!selected.evidence.reliable&&!allForeign&&hypotheses.some(h=>/[JAMO\d]/i.test(h.text))){await recognize('gray-hires-block','gray',prepared.gray,'6');selected=selectOcrHypothesis(hypotheses,{boundedCell:true});}
-    if(!selected.evidence.reliable&&needsNumericKeyRetry(box,hypotheses)){
-      try{
-        await recognize('key-numeric-gray','gray',prepared.gray,'7','J0123456789');
-        await recognize('key-numeric-threshold','threshold',prepared.threshold,'7','J0123456789');
-        selected=selectOcrHypothesis(hypotheses,{boundedCell:true});
-        // This new recognizer is deliberately candidate-only until separately
-        // validated. A whitelist must never manufacture confidence in a key.
-        selected.evidence.reliable=false;selected.evidence.numericFieldRetry=true;
-        selected.reasons=[...new Set([...selected.reasons,'Számmezőre korlátozott OCR-javaslat; nem automatikusan megbízható adat.'])];
-      }finally{await worker.setParameters({tessedit_char_whitelist:''});}
+/** Compare prepared views separately from geometry so the retry policy can be
+ * tested without a camera, canvas implementation, or an OCR model download. */
+export async function recognizePreparedCell(worker,prepared,box,{onStatus=()=>{}}={}) {
+  const started=performance.now(),hypotheses=[];
+  const recognize=async(method,variant,canvas,psm,whitelist='')=>{onStatus(method);await worker.setParameters({tessedit_pageseg_mode:psm,tessedit_char_whitelist:whitelist});const {data}=await worker.recognize(canvas,{}, {blocks:true,text:true});hypotheses.push({method,variant,text:data.text,confidence:data.confidence,symbols:symbolsFrom(data)});};
+  await recognize('gray-hires-line','gray',prepared.gray,'7');
+  await recognize('local-threshold-hires-block','threshold',prepared.threshold,'6');
+  let selected=selectOcrHypothesis(hypotheses,{boundedCell:true});
+  const allForeign=hypotheses.every(h=>foreign(h.text));
+  const codeLike=()=>hypotheses.some(h=>/[JAMO\d]/i.test(h.text));
+  if(!selected.evidence.reliable&&!allForeign&&codeLike()){
+    await recognize('gray-hires-block','gray',prepared.gray,'6');
+    selected=selectOcrHypothesis(hypotheses,{boundedCell:true});
+  }
+  // Raw-line segmentation can resolve dictionary-shaped codes without a
+  // whitelist. Keep already corroborated readings frozen: this retry can also
+  // misread otherwise clear print, so it is never a replacement default.
+  if(!selected.evidence.reliable&&!allForeign&&codeLike()){
+    await recognize('gray-hires-raw-line','gray',prepared.gray,'13');
+    await recognize('local-threshold-hires-raw-line','threshold',prepared.threshold,'13');
+    selected=selectOcrHypothesis(hypotheses,{boundedCell:true});
+    if(hypotheses.some(h=>foreign(h.text))&&selected.evidence.kind){
+      selected.evidence.reliable=false;selected.evidence.foreignConflict=true;
+      selected.reasons=[...new Set([...selected.reasons,'Az OCR-módszerek eltérő kódtípust olvastak; nem megbízható eredmény.'])];
     }
-    return {...box,text:selected.text,confidence:selected.confidence,reasons:selected.reasons,evidence:{...selected.evidence,glyphHeight:prepared.glyphHeight,scale:prepared.scale,elapsedMs:performance.now()-started},grid:true};
-  }finally{prepared.dispose();}
+  }
+  if(!selected.evidence.reliable&&needsNumericKeyRetry(box,hypotheses)){
+    try{
+      await recognize('key-numeric-gray','gray',prepared.gray,'7','J0123456789');
+      await recognize('key-numeric-threshold','threshold',prepared.threshold,'7','J0123456789');
+      selected=selectOcrHypothesis(hypotheses,{boundedCell:true});
+      // A whitelist must never manufacture confidence in a key.
+      selected.evidence.reliable=false;selected.evidence.numericFieldRetry=true;
+      selected.reasons=[...new Set([...selected.reasons,'Számmezőre korlátozott OCR-javaslat; nem automatikusan megbízható adat.'])];
+    }finally{await worker.setParameters({tessedit_char_whitelist:''});}
+  }
+  return {...box,text:selected.text,confidence:selected.confidence,reasons:selected.reasons,evidence:{...selected.evidence,glyphHeight:prepared.glyphHeight,scale:prepared.scale,elapsedMs:performance.now()-started},grid:true};
+}
+
+/** OCR stays entirely in the browser; prepared image buffers are released even
+ * when recognition fails. */
+export async function recognizeCell(worker,views,box,options={}) {
+  const prepared=prepareCellViews(views.grayCanvas||views.canvas,box);
+  if(!prepared)return {...box,text:'',confidence:0,reasons:[],evidence:{reliable:false,kind:'',hypotheses:[],blank:true}};
+  try{return await recognizePreparedCell(worker,prepared,box,options);}
+  finally{prepared.dispose();}
 }
