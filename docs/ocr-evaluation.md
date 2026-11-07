@@ -2,10 +2,11 @@
 
 ## Jelenlegi bizonyíték és cél
 
-A cél legalább 95% jó párosítás jó minőségű, **valódi** dokumentumfotókon. A
-felhasználó által említett fotó a fejlesztési munkaterületre nem érkezett meg,
-így ez a cél jelenleg **nincs megmérve és nincs igazolva**. A szintetikus képeken
-sikeres regressziós teszt nem helyettesíti a valódi fotók mérését.
+A cél legalább 95% jó párosítás jó minőségű, **valódi** dokumentumfotókon.
+Az újonnan átadott két fotó 251 párosítását külön átírtuk és kétszer ellenőriztük;
+az Excel 13 eltérő párja miatt nem szolgálhatott változtatás nélkül referenciaként.
+A [valódi fotós jelentés](real-photo-evaluation.md) bemutatja a kiindulási és javított
+mérést. A szintetikus regressziós teszt továbbra sem helyettesíti a valódi mérést.
 
 Az alkalmazás nem vezet be fizetős felismerő szolgáltatást vagy külső
 dokumentumfeltöltést. A következő mérés is teljes egészében helyben fut.
@@ -163,5 +164,5 @@ kipróbálásra került, dokumentumküldés nélkül. Az itt vizsgált karaktert
 és a teljes szóra adott alacsony biztonsági értéket nem oldotta meg, így nem
 növeltük vele a mobilos letöltési és memóriaigényt.
 
-Ez **szintetikus** regressziós bizonyíték, kis mintával. A valódi dokumentumfotó
-nem érkezett meg; a valódi 95%-os pontossági cél továbbra sincs megmérve.
+Ez a korábbi **szintetikus** regressziós bizonyíték, kis mintával. Az azóta
+átadott valódi fotók külön mérési jelentést kaptak; a két eredmény nem keverhető össze.

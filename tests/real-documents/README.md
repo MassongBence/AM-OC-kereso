@@ -1,8 +1,10 @@
 # Valódi dokumentumok mérési készlete
 
-**A felhasználó által említett valódi táblázatfotó még nem érkezett meg ebbe a
-munkaterületbe. A 95%-os cél valódi dokumentumokon jelenleg nincs megmérve és nincs
-igazolva.** A `tests/fixtures/` generált képeit nem nevezzük valódi tesztanyagnak.
+A felhasználó átadott két valódi fotót és egy Excelt. A kétszer kézzel ellenőrzött
+fotóreferencia 251 párt tartalmaz; az Excel 13 párnál eltér. A források és a teljes
+referencia helyi, verziókezelésen kívüli mappában maradnak. A nyilvános, összesített
+mérés: [valódi fotós jelentés](../../docs/real-photo-evaluation.md).
+A `tests/fixtures/` generált képei továbbra is szintetikusak.
 
 A fotót és a hozzá kézzel ellenőrzött referenciát helyi, verziókezelésen kívüli
 mappában tartsd, például `/tmp/amoc-real/`. Ne commitolj munkadokumentumot vagy

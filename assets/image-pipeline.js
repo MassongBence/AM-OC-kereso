@@ -134,7 +134,7 @@ function centers(indices, gap = 3) {
 /** Find long vertical dividers, then horizontal separators independently in
  * each column. A J cell without internal horizontal lines retains its full
  * height while neighboring location cells may have several row separators. */
-export function detectCells(binary, width, height) {
+function detectStraightCells(binary, width, height) {
   const candidates = [];
   const minRun = Math.max(35, Math.round(height * .12));
   for (let x = 0; x < width; x++) {
@@ -170,6 +170,176 @@ export function detectCells(binary, width, height) {
   return cells.length >= 2 ? cells : [];
 }
 
+/** A small closing is used for geometry only. OCR keeps the original pixels. */
+function closeRuleGaps(binary,width,height) {
+  const dilated=new Uint8Array(binary.length),closed=new Uint8Array(binary.length);
+  for(let y=1;y<height-1;y++)for(let x=1;x<width-1;x++){
+    const p=y*width+x;
+    if(binary[p]||binary[p-1]||binary[p+1]||binary[p-width]||binary[p-width-1]||binary[p-width+1]||binary[p+width]||binary[p+width-1]||binary[p+width+1])dilated[p]=1;
+  }
+  for(let y=1;y<height-1;y++)for(let x=1;x<width-1;x++){
+    const p=y*width+x;
+    if(dilated[p]&&dilated[p-1]&&dilated[p+1]&&dilated[p-width]&&dilated[p-width-1]&&dilated[p-width+1]&&dilated[p+width]&&dilated[p+width-1]&&dilated[p+width+1])closed[p]=1;
+  }
+  return closed;
+}
+const median=values=>{const sorted=[...values].sort((a,b)=>a-b);return sorted[Math.floor(sorted.length/2)];};
+
+/** Enclosed white interiors follow curved/sloped printed borders naturally.
+ * They seed column tracks; text holes and the outside page are rejected. */
+function interiorSeeds(binary,width,height) {
+  const closed=closeRuleGaps(binary,width,height),seen=new Uint8Array(binary.length),queue=new Uint32Array(binary.length),seeds=[];
+  for(let start=0;start<closed.length;start++){
+    if(closed[start]||seen[start])continue;
+    let head=0,tail=1,minX=width,maxX=0,minY=height,maxY=0;
+    queue[0]=start;seen[start]=1;
+    while(head<tail){
+      const p=queue[head++],y=Math.floor(p/width),x=p-y*width;
+      minX=Math.min(minX,x);maxX=Math.max(maxX,x);minY=Math.min(minY,y);maxY=Math.max(maxY,y);
+      if(x>0&&!closed[p-1]&&!seen[p-1]){seen[p-1]=1;queue[tail++]=p-1;}
+      if(x+1<width&&!closed[p+1]&&!seen[p+1]){seen[p+1]=1;queue[tail++]=p+1;}
+      if(y>0&&!closed[p-width]&&!seen[p-width]){seen[p-width]=1;queue[tail++]=p-width;}
+      if(y+1<height&&!closed[p+width]&&!seen[p+width]){seen[p+width]=1;queue[tail++]=p+width;}
+    }
+    const w=maxX-minX+1,h=maxY-minY+1;
+    if(minX===0||minY===0||maxX===width-1||maxY===height-1||w<28||h<10||tail<350||tail>width*height*.3||tail/(w*h)<.63)continue;
+    seeds.push({x0:minX-1,y0:minY-1,x1:maxX+1,y1:maxY+1,left:minX-1,right:maxX+1,cy:(minY+maxY)/2});
+  }
+  return seeds;
+}
+function trackPosition(track,y){
+  const points=track.points;
+  let a=points[0],b=points[1]||a;
+  for(let i=1;i<points.length;i++){if(points[i].cy>=y){a=points[i-1];b=points[i];break;}a=points[Math.max(0,i-1)];b=points[i];}
+  const distance=b.cy-a.cy,t=distance?Math.max(-2,Math.min(3,(y-a.cy)/distance)):0;
+  const interpolate=field=>a[field]+Math.max(-.3,Math.min(.3,distance?(b[field]-a[field])/distance:0))*(distance*t);
+  return {left:interpolate('left'),right:interpolate('right')};
+}
+function seedTracks(seeds){
+  const tracks=[];
+  for(const seed of [...seeds].sort((a,b)=>a.cy-b.cy||a.left-b.left)){
+    const center=(seed.left+seed.right)/2,w=seed.right-seed.left;
+    const choices=tracks.map(track=>{const p=trackPosition(track,seed.cy),tw=p.right-p.left;return{track,d:Math.abs((p.left+p.right)/2-center),tw};})
+      .filter(item=>item.tw>0&&w/item.tw>.55&&w/item.tw<1.8&&item.d<Math.max(12,Math.min(w,item.tw)*.47)).sort((a,b)=>a.d-b.d);
+    const track=choices[0]?.track||{points:[]};if(!choices.length)tracks.push(track);track.points.push(seed);
+  }
+  tracks.forEach(track=>track.points.sort((a,b)=>a.cy-b.cy));
+  return tracks.filter(track=>track.points.length>=2).sort((a,b)=>median(a.points.map(p=>p.left))-median(b.points.map(p=>p.left)));
+}
+function nearRule(binary,width,height,x,y,radius){
+  let best=-1,bestScore=-Infinity;
+  for(let xx=Math.max(1,Math.round(x-radius));xx<=Math.min(width-2,Math.round(x+radius));xx++){
+    if(!binary[y*width+xx])continue;
+    let support=0;for(let dy=-3;dy<=3;dy++){const yy=y+dy;if(yy>=0&&yy<height&&(binary[yy*width+xx]||binary[yy*width+xx-1]||binary[yy*width+xx+1]))support++;}
+    const score=support*2-Math.abs(xx-x)*.45;
+    if(support>=4&&score>bestScore){bestScore=score;best=xx;}
+  }
+  return best;
+}
+/** Follow one printed horizontal rule, rather than require identical y at every x. */
+function traceRule(binary,width,height,centerX,centerY,left,right){
+  const follow=direction=>{
+    let y=centerY,gaps=0,covered=0,lastX=centerX;
+    const end=direction<0?left+2:right-2;
+    for(let x=centerX+direction*2;direction<0?x>=end:x<=end;x+=direction*2){
+      let chosen=-1;
+      for(const dy of [0,-1,1,-2,2]){const yy=y+dy;if(yy>0&&yy<height-1&&(binary[yy*width+Math.round(x)]||binary[yy*width+Math.round(x)+direction])){chosen=yy;break;}}
+      if(chosen<0){if(++gaps>2)break;}else{y=chosen;gaps=0;covered++;lastX=x;}
+      if(Math.abs(y-centerY)>(right-left)*.25)break;
+    }
+    return{y,x:lastX,covered};
+  };
+  const l=follow(-1),r=follow(1),span=right-left;
+  if(l.x-left>Math.max(6,span*.08)||right-r.x>Math.max(6,span*.08))return null;
+  return{y:centerY,leftY:l.y,rightY:r.y,quality:(l.covered+r.covered)*2/span};
+}
+function tracedTrackCells(track,binary,width,height){
+  const traceSide=side=>{
+    const values=new Float32Array(height),found=new Uint8Array(height),anchor=Math.round(track.points[0].cy);
+    const seed=trackPosition(track,anchor)[side];
+    for(const direction of [-1,1]){
+      let previous=seed,lastSeen=anchor;
+      for(let y=anchor;y>0&&y<height-1;y+=direction){
+        const predicted=trackPosition(track,y),span=predicted.right-predicted.left;
+        const continued=Math.abs(y-lastSeen)<=5,outside=y<track.points[0].cy||y>track.points[track.points.length-1].cy;
+        const center=continued&&outside?previous:predicted[side];
+        const position=nearRule(binary,width,height,center,y,continued&&outside?4:Math.max(6,Math.min(12,span*.12)));
+        if(position>=0){values[y]=position;found[y]=1;previous=position;lastSeen=y;}
+        else values[y]=predicted[side];
+      }
+    }
+    return{values,found};
+  };
+  const leftTrace=traceSide('left'),rightTrace=traceSide('right'),leftAt=leftTrace.values,rightAt=rightTrace.values,present=new Uint8Array(height),rules=[];
+  for(let y=1;y<height-1;y++){
+    if(leftTrace.found[y]&&rightTrace.found[y]&&rightAt[y]-leftAt[y]>=24)present[y]=1;
+    const center=Math.round((leftAt[y]+rightAt[y])/2);
+    if(center>0&&center<width-1&&binary[y*width+center]){const rule=traceRule(binary,width,height,center,y,leftAt[y],rightAt[y]);if(rule&&rule.quality>.7)rules.push(rule);}
+  }
+  const grouped=[];
+  for(const rule of rules){const prev=grouped[grouped.length-1];if(prev&&rule.y-prev.y<=3){if(rule.quality>prev.quality)grouped[grouped.length-1]=rule;}else grouped.push(rule);}
+  // Each open end must be supported by both vertical printed borders. A blank
+  // gutter cannot create a cell merely by inheriting a previous text row.
+  const runs=[];let start=-1,last=-1,gap=0;
+  for(let y=1;y<height;y++){
+    if(present[y]){if(start<0)start=y;last=y;gap=0;}
+    else if(start>=0&&++gap>4){if(last-start>=12)runs.push([start,last]);start=-1;}
+  }
+  if(start>=0&&last-start>=12)runs.push([start,last]);
+  const cells=[];
+  for(const [start,end]of runs){
+    const bounds=grouped.filter(rule=>rule.y>=start-4&&rule.y<=end+4).map(rule=>({...rule}));
+    if(!bounds.length)continue;
+    const edgeEnd=(trace,from,direction)=>{let last=from,gap=0;for(let y=from;y>0&&y<height-1;y+=direction){if(trace.found[y]){last=y;gap=0;}else if(++gap>4)break;}return last;};
+    if(bounds[0].y-start>6)bounds.unshift({y:start,leftY:edgeEnd(leftTrace,start,-1),rightY:edgeEnd(rightTrace,start,-1),open:true});
+    if(end-bounds[bounds.length-1].y>6)bounds.push({y:end,leftY:edgeEnd(leftTrace,end,1),rightY:edgeEnd(rightTrace,end,1),open:true});
+    for(let i=0;i+1<bounds.length;i++){
+      const top=bounds[i],bottom=bounds[i+1];if(bottom.y-top.y<10)continue;
+      let support=0;for(let y=Math.max(1,top.y);y<=Math.min(height-1,bottom.y);y++)support+=present[y];
+      if(support/(bottom.y-top.y+1)<.7)continue;
+      const at=(values,y)=>values[Math.max(1,Math.min(height-2,Math.round(y)))];
+      const polygon=[{x:at(leftAt,top.leftY),y:top.leftY},{x:at(rightAt,top.rightY),y:top.rightY},{x:at(rightAt,bottom.rightY),y:bottom.rightY},{x:at(leftAt,bottom.leftY),y:bottom.leftY}];
+      const x0=Math.max(0,Math.floor(Math.min(...polygon.map(p=>p.x)))),x1=Math.min(width,Math.ceil(Math.max(...polygon.map(p=>p.x)))),y0=Math.max(0,Math.min(top.leftY,top.rightY)),y1=Math.min(height,Math.max(bottom.leftY,bottom.rightY));
+      if(x1-x0<24||y1-y0<10)continue;
+      cells.push({x0,y0,x1,y1,polygon,topRule:top,bottomRule:bottom,openTop:Boolean(top.open),openBottom:Boolean(bottom.open),ruleSupport:support/(bottom.y-top.y+1)});
+    }
+  }
+  return cells;
+}
+/** Local connected rule geometry survives independent table lanes and folds.
+ * Logical bounds refer to each lane's shared divider; crop bounds remain actual. */
+export function detectCurvedCells(binary,width,height){
+  const tracks=seedTracks(interiorSeeds(binary,width,height));if(tracks.length<2)return[];
+  const adjacent=(a,b)=>{
+    const ys=a.points.flatMap(p=>b.points.filter(q=>Math.min(p.y1,q.y1)>Math.max(p.y0,q.y0)).map(q=>(Math.max(p.y0,q.y0)+Math.min(p.y1,q.y1))/2));
+    if(!ys.length)return false;
+    const distances=ys.map(y=>{const pa=trackPosition(a,y),pb=trackPosition(b,y);return Math.abs(pa.right-pb.left);});
+    return median(distances)<=10;
+  };
+  const lanes=[];let current=[];
+  for(const track of tracks){if(current.length&&!adjacent(current[current.length-1],track)){if(current.length>=2)lanes.push(current);current=[];}current.push(track);}
+  if(current.length>=2)lanes.push(current);
+  const result=[];
+  lanes.forEach((lane,laneId)=>lane.forEach((track,column)=>{
+    const cells=tracedTrackCells(track,binary,width,height);
+    for(const cell of cells){
+      // In two-column J/location lanes both logical y coordinates are measured
+      // at the shared middle border, including when horizontal lines slope.
+      const side=column%2===0?'rightY':'leftY';
+      result.push({...cell,laneId,column,pairingBounds:{x0:laneId*1000+column*100,x1:laneId*1000+(column+1)*100,y0:cell.topRule[side],y1:cell.bottomRule[side]}});
+    }
+  }));
+  return result;
+}
+
+export function detectCells(binary,width,height){
+  const straight=detectStraightCells(binary,width,height);
+  // Keep exact simple vector/PDF grids cheap. Tall page/gutter rectangles are
+  // evidence that fixed-x tracing has confused separate physical tables.
+  if(straight.length&&straight.every(cell=>cell.y1-cell.y0<=height*.6&&cell.x1-cell.x0<=width*.85))return straight;
+  return detectCurvedCells(binary,width,height);
+}
+
 export function assignWordsToCells(words, cells) {
   const groups = cells.map(cell => ({...cell, words: []})), orphans = [];
   for (const word of words) {
@@ -187,7 +357,8 @@ export function assignWordsToCells(words, cells) {
       return Math.abs(aa.y0 - bb.y0) > Math.max(aa.y1 - aa.y0, bb.y1 - bb.y0) * .6 ? aa.y0 - bb.y0 : aa.x0 - bb.x0;
     });
     const confidence = Math.min(...cell.words.map(word => word.confidence ?? 0));
-    return {x0: cell.x0, y0: cell.y0, x1: cell.x1, y1: cell.y1, text: cell.words.map(word => word.text).join(' '), confidence, bounded: true, grid: true};
+    const {words: groupedWords, ...geometry} = cell;
+    return {...geometry, text: groupedWords.map(word => word.text).join(' '), confidence, bounded: true, grid: true};
   });
   return output.concat(orphans);
 }
