@@ -135,7 +135,7 @@ export function buildActivation(records) {
     const resolved = valid && (row.uncertain === false || row.verified === true);
     return {row, valid, resolved, key: isObject(row) ? normalizeKey(row.key) : ''};
   });
-  const excludedKeys = new Set(prepared.filter(item => !item.resolved && item.key).map(item => item.key));
+  const excludedKeys=new Set(prepared.filter(item=>!item.resolved).flatMap(item=>[item.key,...(Array.isArray(item.row?.affectedKeys)?item.row.affectedKeys.map(normalizeKey):[])]).filter(Boolean));
   const reliable = [], uncertain = [];
   for (const item of prepared) {
     if (item.resolved && !excludedKeys.has(item.key)) reliable.push({...item.row, key: item.key});

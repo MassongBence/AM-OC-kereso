@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {adaptiveThreshold, detectCells, estimateSkew, assignWordsToCells, contrastGrayscale, validatePerspectiveCorners, perspectiveHomography, warpPerspectivePixels, detectPerspectiveQuad, detectCurvedCells} from '../assets/image-pipeline.js';
+import {adaptiveThreshold, detectCells, estimateSkew, assignWordsToCells, contrastGrayscale, validatePerspectiveCorners, perspectiveHomography, warpPerspectivePixels, detectPerspectiveQuad, detectCurvedCells, imageDimensions, scaleCellGeometry} from '../assets/image-pipeline.js';
 
 function ruledTable() {
   const width = 500, height = 400, binary = new Uint8Array(width * height);
@@ -180,4 +180,30 @@ test('word assignment retains curved-lane crop and logical pairing geometry',()=
   const geometry={x0:10,y0:10,x1:100,y1:60,laneId:0,column:1,pairingBounds:{x0:100,y0:12,x1:200,y1:57},polygon:[{x:10,y:10},{x:98,y:15},{x:100,y:60},{x:12,y:55}]};
   const assigned=assignWordsToCells([{text:'AM-OC-123',bbox:{x0:20,y0:25,x1:90,y1:45},confidence:98}],[geometry]);
   assert.equal(assigned[0].laneId,0);assert.deepEqual(assigned[0].pairingBounds,geometry.pairingBounds);assert.deepEqual(assigned[0].polygon,geometry.polygon);
+});
+
+
+test('camera image budget preserves more small-print pixels while bounding oversized captures',()=>{
+  assert.deepEqual(imageDimensions(1536,2048),{width:1536,height:2048,scaleX:1,scaleY:1});
+  const phone=imageDimensions(4032,3024);
+  assert.equal(phone.width,3266);assert.equal(phone.height,2449);
+  assert(phone.width*phone.height<=8_000_000);
+  assert(phone.width>2600,'a normal phone image is no longer capped at2600');
+  const portrait=imageDimensions(3024,4032);assert.deepEqual([portrait.width,portrait.height],[2449,3266]);
+  const large=imageDimensions(8064,6048);
+  assert(large.width<=4096&&large.height<=4096&&large.width*large.height<=8_000_000);
+  for(const [w,h]of[[0,10],[10,0],[NaN,20]])assert.throws(()=>imageDimensions(w,h));
+});
+
+test('geometry sample coordinates scale back to OCR pixels without scaling lane identifiers',()=>{
+  const original={x0:20,y0:40,x1:60,y1:100,laneId:1,column:1,
+    polygon:[{x:20,y:40},{x:60,y:42},{x:60,y:100},{x:20,y:98}],
+    pairingBounds:{x0:1100,x1:1200,y0:42,y1:100},
+    topRule:{y:40,leftY:40,rightY:42,quality:.99},bottomRule:{y:100,leftY:98,rightY:100},ruleSupport:.95};
+  const [scaled]=scaleCellGeometry([original],2,3);
+  assert.deepEqual([scaled.x0,scaled.y0,scaled.x1,scaled.y1],[40,120,120,300]);
+  assert.deepEqual(scaled.pairingBounds,{x0:1100,x1:1200,y0:126,y1:300});
+  assert.deepEqual(scaled.polygon[1],{x:120,y:126});
+  assert.equal(scaled.topRule.quality,.99);assert.equal(scaled.topRule.rightY,126);
+  assert.deepEqual(original.pairingBounds,{x0:1100,x1:1200,y0:42,y1:100},'source geometry is unchanged');
 });

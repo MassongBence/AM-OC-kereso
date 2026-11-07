@@ -124,3 +124,14 @@ test('activation selection is pure, and invalid certain records do not erase oth
   assert.deepEqual(result.database,{J069:'AM-OC-425'}); assert.equal(JSON.stringify(records),before);
   assert.deepEqual(buildActivation([]),{database:{},reliable:[],uncertain:[],excludedKeys:[]});
 });
+
+test('a digital ambiguous cell quarantines its actually printed keys without inventing a pairing',()=>{
+ const result=buildActivation([
+  {key:'J001',loc:'AM-OC-429',uncertain:false},
+  {key:'J002',loc:'AM-OC-551',uncertain:false},
+  {key:'J003',loc:'AM-OC-581',uncertain:false},
+  {key:'',loc:'AM-OC-999',affectedKeys:['J001','J002'],uncertain:true},
+ ]);
+ assert.deepEqual(result.database,{J003:'AM-OC-581'});
+ assert.deepEqual(result.excludedKeys.sort(),['J001','J002']);
+});

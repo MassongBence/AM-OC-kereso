@@ -5,6 +5,8 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { chromium } from 'playwright';
+import XLSX from 'xlsx';
+import { createHash } from 'node:crypto';
 
 const root = path.resolve(fileURLToPath(new URL('../', import.meta.url)));
 const fixture = name => fileURLToPath(new URL(`./fixtures/${name}`, import.meta.url));
@@ -305,6 +307,50 @@ test('actual XLSX parser preserves merged J cells and repeated keys across works
   const page=await freshPage(t); await processFiles(page,fixture('merged-multisheet.xlsx'));
   await reviewAndApply(page,{verifyUncertain:false});
   assert.deepEqual(await database(page),{J069:'AM-OC-425, AM-OC-426, AM-OC-427',J070:'AM-OC-588'});
+});
+
+test('Excel replaces a cleared selection, deduplicates equivalent sheets, and uses no OCR uncertainty or engine',async t=>{
+  const page=await freshPage(t,{serviceWorkers:'block'}),ocrRequests=[];
+  page.on('request',request=>{if(/tesseract|eng\.traineddata|\/worker\.min\.js/.test(request.url()))ocrRequests.push(request.url());});
+  await processFiles(page,csvFile('old-selection.csv','J-kód;Hely\nJ999;AM-OC-999'));
+  await page.locator('#clearFiles').click();
+  assert.equal(await page.locator('#reviewPanel').isVisible(),false);
+  const workbook=XLSX.utils.book_new();
+  const merged=XLSX.utils.aoa_to_sheet([
+    ['J-kód','AM–OC helyek'],['J001','AM-OC-429'],['J003','AM-OC-581'],['','AM-OC-582'],['J001','AM-OC-430'],
+  ]);
+  merged['!merges']=[{s:{r:2,c:0},e:{r:3,c:0}}];
+  XLSX.utils.book_append_sheet(workbook,merged,'Összevont');
+  XLSX.utils.book_append_sheet(workbook,XLSX.utils.aoa_to_sheet([
+    ['AM-OC','J-kód'],['AM-OC-429',1],['AM-OC-581',3],['AM-OC-582',3],['AM-OC-430',1],
+  ]),'Ismételt');
+  XLSX.utils.book_append_sheet(workbook,XLSX.utils.aoa_to_sheet([
+    ['Sorszám','Mennyiség','Hely'],[1,3,'AM-OC-999'],
+  ]),'Darabszámok');
+  const buffer=XLSX.write(workbook,{type:'buffer',bookType:'xlsx'});
+  await processFiles(page,{name:'current.xlsx',mimeType:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',buffer});
+  assert.equal(await page.locator('#reliableSummary').innerText(),'2 automatikusan aktiválható J-kód (4 párosítás)');
+  assert.equal(await page.locator('#uncertainSummary').innerText(),'0 kimaradó, bizonytalan javaslat');
+  assert.doesNotMatch(await page.locator('#review').textContent(),/J999|old-selection/);
+  assert.equal(await page.locator('#documentName').inputValue(),'current.xlsx');
+  assert.equal(await database(page),null,'import leaves the saved active database untouched until activation');
+  await page.locator('#search').fill('1');
+  assert.equal(await page.locator('#result').innerText(),'AM-OC-429');
+  await page.locator('#exportDiagnostics').evaluate(el=>el.closest('details').open=true);
+  const waiting=page.waitForEvent('download');await page.locator('#exportDiagnostics').click();
+  const download=await waiting,report=JSON.parse(await readFile(await download.path(),'utf8'));
+  assert.equal(download.suggestedFilename(),'AM_OC_beolvasasi_adatok.json');
+  assert.equal(report.files.length,1);
+  assert.equal(report.files[0].name,'current.xlsx');
+  assert.equal(report.files[0].sha256,createHash('sha256').update(buffer).digest('hex'));
+  assert.equal(report.files[0].records,4);
+  const digital=report.files[0].diagnostics.find(entry=>entry.method==='digital-workbook');
+  assert.equal(digital.duplicatePairs,4);
+  assert.equal(digital.uncertainRecords,0);
+  assert.equal('records' in digital,false,'diagnostics omit imported J/location values');
+  assert.deepEqual(ocrRequests,[],'a structured workbook must not initialize or fetch OCR');
+  await reviewAndApply(page,{verifyUncertain:false});
+  assert.deepEqual(await database(page),{J001:'AM-OC-429, AM-OC-430',J003:'AM-OC-581, AM-OC-582'});
 });
 
 test('two-page synthetic PDF keeps both pages and optional verification of inferred matches',async t=>{

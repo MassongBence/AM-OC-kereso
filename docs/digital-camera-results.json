@@ -1,0 +1,216 @@
+{
+  "schemaVersion": 1,
+  "baseCommit": "30dea45",
+  "branch": "fix/digital-import-camera-pipeline",
+  "measuredAt": "2026-11-07T18:58:42.849Z",
+  "scope": "Known workbook import fidelity and the two original photos. Production am.xlsx and new iPhone captures unavailable; not a physical Safari test.",
+  "excel": {
+    "source": {
+      "name": "referencia_excel.xlsx",
+      "sha256": "c43d9205fdb2c8cbd3e80c4940bd1c745c892bcc6dddca15f12a1bed2f3ba678"
+    },
+    "reference": "Previously saved, separately transcribed Excel pairs; not photo ground truth.",
+    "keys": 188,
+    "referencePairs": 251,
+    "before": {
+      "records": 439,
+      "pairOccurrences": 502,
+      "uniquePairs": 251,
+      "uncertain": 0
+    },
+    "after": {
+      "records": 251,
+      "duplicatesRemoved": 251,
+      "uncertain": 0,
+      "correct": 251,
+      "missing": 0,
+      "wrong": 0
+    },
+    "elapsedMs": 271
+  },
+  "camera": {
+    "sources": [
+      {
+        "name": "foto_1.jpg",
+        "sha256": "eed5fb67128991a8d0edbdf8383dd11d1c7ee3247513088a58b7baab309b1e1f"
+      },
+      {
+        "name": "foto_2.jpg",
+        "sha256": "72de993b0e199cef75bd1904876c9794c1603ef6da8c554f8cddc396657cbc20"
+      }
+    ],
+    "elapsedMs": 100938,
+    "previousElapsedMs": 103478,
+    "total": {
+      "allCandidates": {
+        "referencePairs": 251,
+        "correct": 225,
+        "missing": 26,
+        "wrong": 6,
+        "precision": 0.974025974025974,
+        "recall": 0.896414342629482,
+        "exactPairingRate": 0.8754863813229572
+      },
+      "activation": {
+        "referencePairs": 251,
+        "correct": 103,
+        "missing": 148,
+        "wrong": 0,
+        "precision": 1,
+        "recall": 0.4103585657370518,
+        "exactPairingRate": 0.4103585657370518
+      }
+    },
+    "previous": {
+      "allCandidates": {
+        "referencePairs": 251,
+        "correct": 225,
+        "missing": 26,
+        "wrong": 6,
+        "precision": 0.974025974025974,
+        "recall": 0.896414342629482,
+        "exactPairingRate": 0.8754863813229572
+      },
+      "activation": {
+        "referencePairs": 251,
+        "correct": 103,
+        "missing": 148,
+        "wrong": 0,
+        "precision": 1,
+        "recall": 0.4103585657370518,
+        "exactPairingRate": 0.4103585657370518
+      }
+    },
+    "pages": [
+      {
+        "source": "foto_1.jpg",
+        "allCandidates": {
+          "referencePairs": 85,
+          "correct": 83,
+          "missing": 2,
+          "wrong": 0,
+          "precision": 1,
+          "recall": 0.9764705882352941,
+          "exactPairingRate": 0.9764705882352941
+        },
+        "activation": {
+          "referencePairs": 85,
+          "correct": 43,
+          "missing": 42,
+          "wrong": 0,
+          "precision": 1,
+          "recall": 0.5058823529411764,
+          "exactPairingRate": 0.5058823529411764
+        },
+        "keys": 37,
+        "excludedKeys": 28
+      },
+      {
+        "source": "foto_2.jpg",
+        "allCandidates": {
+          "referencePairs": 166,
+          "correct": 142,
+          "missing": 24,
+          "wrong": 6,
+          "precision": 0.9594594594594594,
+          "recall": 0.8554216867469879,
+          "exactPairingRate": 0.8255813953488372
+        },
+        "activation": {
+          "referencePairs": 166,
+          "correct": 60,
+          "missing": 106,
+          "wrong": 0,
+          "precision": 1,
+          "recall": 0.3614457831325301,
+          "exactPairingRate": 0.3614457831325301
+        },
+        "keys": 51,
+        "excludedKeys": 62
+      }
+    ],
+    "realTarget": {
+      "established": false,
+      "scope": "Only the supplied, manually checked input corpus; not general OCR accuracy.",
+      "blockers": [
+        "The precision, recall and exact pairing rate do not all meet the threshold."
+      ]
+    },
+    "failures": [],
+    "issues": [],
+    "commonUncertaintyReasons": [
+      [
+        "OCR: ellenőrizd az eredeti dokumentumon.",
+        129
+      ],
+      [
+        "Alacsony OCR-biztonság.",
+        111
+      ],
+      [
+        "Nincs két magas biztonságú, javítatlan OCR-egyezés.",
+        87
+      ],
+      [
+        "Számmezőre korlátozott OCR-javaslat; nem automatikusan megbízható adat.",
+        30
+      ],
+      [
+        "Az OCR-módszerek eltérő érvényes kódot olvastak; nem megbízható eredmény.",
+        19
+      ],
+      [
+        "Nincs az AM–OC cellát lefedő J-cella.",
+        15
+      ],
+      [
+        "Az ehhez a J-kódhoz tartozó helycella nem olvasható; a teljes J-kód kimarad a biztos adatokból.",
+        13
+      ],
+      [
+        "OCR-javítási javaslat: „JO55” → „J055”. Ellenőrizd a karaktereket!",
+        3
+      ]
+    ]
+  },
+  "controlledJpegDetailTest": {
+    "synthetic": true,
+    "sourceDimensions": [
+      4032,
+      3024
+    ],
+    "sourceBytes": 76308,
+    "beforeOcrDimensions": [
+      2600,
+      1950
+    ],
+    "afterOcrDimensions": [
+      3266,
+      2449
+    ],
+    "beforeGlyphPixels": 11,
+    "afterGlyphPixels": 13,
+    "jpegReencoded": false,
+    "scope": "Resolution regression only, not OCR accuracy."
+  },
+  "tests": {
+    "unit": {
+      "passed": 118,
+      "failed": 0
+    },
+    "browser": {
+      "passed": 27,
+      "failed": 0
+    },
+    "vendorReproducible": true
+  },
+  "codeSha256": {
+    "assets/app.js": "4b2c4da047e78d23887f6f124f8958a7a7799a2f28881c70b2a6e5e46c6a5de0",
+    "assets/importers.js": "d02f86e8ffca2cafd30abbce866014c5b7ae2f7719a7a939d028b55403c101a4",
+    "assets/spreadsheet-import.js": "9b1861ad795a15b43db00a2ccf6b9e66eee2b7e0d19ea4bbf83651222a00cca5",
+    "assets/image-pipeline.js": "5f2f62137cfa09581356bebd09d399b759576d0955a82c4065ca95605031fcb7",
+    "assets/document-store.js": "b4d07eef7d84b6db7e9644a032a9a17c86dbf50fa27b27687487ed6507a9a8c3",
+    "assets/cell-ocr.js": "1c3636b075437b83c02b544b541edd5a182055e289c59c1908d2a8b5bd5ab402",
+    "assets/table-core.js": "dc22d4234f74b7f5f1e48498820498be1b77eda5d9419083fcce96fe19930383"
+  }
+}

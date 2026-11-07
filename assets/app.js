@@ -1,12 +1,13 @@
 import {ORIGINAL} from './original-data.js';
-import {normalizeKey} from './table-core.js';
-import {DocumentImporter} from './importers.js';
+import {normalizeKey,extractPlaces} from './table-core.js';
+import {DocumentImporter,abortable} from './importers.js';
 import {imageFileToCanvas} from './image-pipeline.js';
 import {DOCUMENTS_KEY,createDocument,loadDocuments,activateDocument,deleteActive,restorePrevious,buildActivation} from './document-store.js';
 
 const $=id=>document.getElementById(id);
 const MISSING='Nem található vagy nem sikerült felismerni az aktív dokumentációban.';
 let state={version:1,active:null,previous:null}, storageError='', pending=[], selected=[],cameraFiles=[],busy=false,batchFailed=false;
+let currentJob=null,autoName='',lastImportReport=null;
 let selectionVersion=0, timer, cache=new Map(), importers=new Set(), previews=new Map(), fileIDs=new WeakMap(),nextFileID=1;
 let cornerImage=null,manualCorners=[{x:0,y:0},{x:1,y:0},{x:1,y:1},{x:0,y:1}],cornerVersion=0,dragCorner=-1;
 const status=text=>{$('status').textContent=text;};
@@ -30,24 +31,30 @@ function refresh(){
  $('restorePrevious').disabled=busy||!state.previous||!!storageError;
 }
 $('search').addEventListener('input',refresh);refresh();
-$('newDocument').onclick=()=>{clearTimeout(timer);selected=[];cameraFiles=[];$('files').value='';$('camera').value='';$('documentName').value='';selectionVersion++;clearReview();if(!busy)clearCache();picked();$('files').scrollIntoView({block:'center'});$('files').click();};
+$('newDocument').onclick=()=>{clearTimeout(timer);stopJob();selected=[];cameraFiles=[];$('files').value='';$('camera').value='';$('documentName').value='';autoName='';selectionVersion++;clearReview();resetImportReport();clearCache();picked();$('progress').dataset.state='done';$('files').scrollIntoView({block:'center'});$('files').click();};
 $('showActive').onclick=()=>{$('activeRows').classList.toggle('hide');$('showActive').textContent=$('activeRows').classList.contains('hide')?'Tartalom megjelenítése':'Tartalom elrejtése';};
-function clearReview(){pending=[];$('reliableReview').replaceChildren();$('uncertainReview').replaceChildren();$('reviewPanel').classList.add('hide');$('sourcePreview').classList.add('hide');$('previewImage').removeAttribute('src');$('reviewStatus').textContent='';}
+function clearReview(){pending=[];$('reliableReview').replaceChildren();$('uncertainReview').replaceChildren();$('reviewPanel').classList.add('hide');$('sourcePreview').classList.add('hide');$('previewImage').removeAttribute('src');$('reviewStatus').textContent='';$('reviewSummary').textContent='';$('sourceButtons').replaceChildren();$('apply').disabled=true;}
 function clearCache(){for(const importer of importers)importer.disposePreviews();importers.clear();cache.clear();previews.clear();}
 function picked(){
  $('picked').textContent=selected.length?selected.map(f=>f.name).join(' • ')+` (${selected.length} fájl)`:'Nincs kijelölt fájl.';
- if(!$('documentName').value.trim()&&selected.length)$('documentName').value=selected.length===1?selected[0].name:`${selected[0].name} + ${selected.length-1} fájl`;
+ if(!$('documentName').value.trim()||$('documentName').value===autoName){autoName=selected.length?(selected.length===1?selected[0].name:`${selected[0].name} + ${selected.length-1} fájl`):'';$('documentName').value=autoName;}
  prepareCorners();
 }
+function stopJob(){
+ const job=currentJob;currentJob=null;
+ if(job){job.controller.abort();job.importer.cancel().catch(()=>{});importers.delete(job.importer);}
+ setBusy(false);
+}
+function resetImportReport(){lastImportReport=null;$('log').textContent='';$('status').textContent='';$('diagnosticsSummary').textContent='';$('exportDiagnostics').disabled=true;}
 function queueProcess(){
- selectionVersion++;clearTimeout(timer);$('progress').dataset.state='queued';
- if(!selected.length){clearReview();$('progress').dataset.state='done';return;}
- timer=setTimeout(()=>{if(!busy)processFiles();},200);
+ selectionVersion++;clearTimeout(timer);stopJob();clearReview();resetImportReport();$('progress').dataset.state='queued';
+ if(!selected.length){$('progress').dataset.state='done';$('progress').value=0;$('progress').classList.add('hide');return;}
+ timer=setTimeout(()=>processFiles(),200);
 }
 $('files').onchange=e=>{selected=[...e.target.files,...cameraFiles];picked();queueProcess();};
 $('cam').onclick=()=>{$('camera').value='';$('camera').click();};
 $('camera').onchange=e=>{cameraFiles.push(...e.target.files);selected=[...$('files').files,...cameraFiles];picked();queueProcess();};
-$('clearFiles').onclick=()=>{selected=[];cameraFiles=[];$('files').value='';$('camera').value='';picked();queueProcess();if(!busy)clearCache();};
+$('clearFiles').onclick=()=>{selected=[];cameraFiles=[];$('files').value='';$('camera').value='';picked();queueProcess();clearCache();};
 picked();
 
 function selection(){return buildActivation(pending.map((row,index)=>({...row,_index:index})));}
@@ -69,7 +76,7 @@ function renderReview(){
  }
  $('sourceButtons').replaceChildren();
  for(const source of new Set(pending.map(row=>row.source))){if(!previews.has(source))continue;const wrap=el('div'),button=el('button','Eredeti oldal megtekintése','secondary');wrap.append(el('p',source,'small'));button.onclick=()=>{$('previewImage').src=previews.get(source);$('previewLabel').textContent=source;$('sourcePreview').classList.remove('hide');$('sourcePreview').scrollIntoView({block:'nearest'});};wrap.append(button);$('sourceButtons').append(wrap);}
- $('reliableSummary').textContent=`${Object.keys(db).length} automatikusan aktiválható J-kód (${summary.reliable.length} párosítás)`;
+ $('reliableSummary').textContent=`${Object.keys(db).length} automatikusan aktiválható J-kód (${Object.values(db).reduce((n,loc)=>n+extractPlaces(loc).length,0)} párosítás)`;
  $('uncertainSummary').textContent=`${summary.uncertain.length} kimaradó, bizonytalan javaslat`;
  $('reviewSummary').textContent=`${Object.keys(db).length} megbízható J-kód aktiválható egyetlen művelettel. ${summary.uncertain.length} bizonytalan javaslat kimarad. ${summary.excludedKeys.length?summary.excludedKeys.length+' érintett J-kód teljes helylistája kimarad. ':''}A felismert darabszám nem igazolja a dokumentum teljességét.`;
  $('apply').disabled=busy||batchFailed||!Object.keys(db).length||!!storageError;
@@ -95,44 +102,71 @@ $('apply').onclick=()=>{
  }catch(error){$('reviewStatus').textContent=error.message;}
 };
 function setBusy(value){busy=value;for(const id of ['process','apply','reset','deleteActive','restorePrevious'])$(id).disabled=value;refresh();}
+async function inputHash(file){
+ if(!globalThis.crypto?.subtle)return null;
+ const hash=await crypto.subtle.digest('SHA-256',await file.arrayBuffer());
+ return Array.from(new Uint8Array(hash),b=>b.toString(16).padStart(2,'0')).join('');
+}
+function summarizeDiagnostics(entries){
+ return entries.map(entry=>{
+  const {records,cells,...metadata}=entry;
+  return {...metadata,...(records?{candidateRecords:records.length,uncertainRecords:records.filter(row=>row.uncertain).length}:{}),...(cells?{cellCount:cells.length}:{})};
+ });
+}
 async function processFiles({force=false}={}){
  if(busy)return;
  if(!selected.length){status('Előbb válassz fájlt vagy készíts fotót.');$('progress').dataset.state='done';return;}
  if(force)clearCache();
- const version=selectionVersion,files=[...selected];clearReview();batchFailed=false;setBusy(true);
+ const version=selectionVersion,files=[...selected],records=[],report=[],fileReports=[];
+ clearReview();batchFailed=false;setBusy(true);
  const corners=$('useCorners').checked&&files.length===1?manualCorners:null;
  const config=JSON.stringify({rotation:Number($('rotation').value),corners});
- const importer=new DocumentImporter({onStatus:status,rotation:Number($('rotation').value),corners});importers.add(importer);
- $('progress').classList.remove('hide');$('progress').value=0;$('progress').dataset.state='running';$('log').textContent='';const report=[];
+ const controller=new AbortController(),job={version,controller,importer:null};
+ const isCurrent=()=>currentJob===job&&!controller.signal.aborted;
+ const importer=new DocumentImporter({signal:controller.signal,onStatus:text=>{if(isCurrent())status(text);},rotation:Number($('rotation').value),corners});job.importer=importer;currentJob=job;importers.add(importer);
+ $('progress').classList.remove('hide');$('progress').value=0;$('progress').dataset.state='running';$('log').textContent='';let failed=false;
  try{
   for(let i=0;i<files.length;i++){
+   if(!isCurrent())return;
    const file=files[i];if(!fileIDs.has(file))fileIDs.set(file,nextFileID++);
    const source=file.name+' · '+fileIDs.get(file)+'. fájl';status('Feldolgozás: '+file.name+` (${i+1}/${files.length})`);
    try{
     let entry=cache.get(file);if(entry?.config!==config)entry=null;
-    if(!entry){const issueStart=importer.issues.length;const rows=await importer.read(file,{label:source});entry={rows,issues:importer.issues.slice(issueStart),config};cache.set(file,entry);}
-    pending.push(...entry.rows.map(row=>({...row,verified:false})));
-    if(!entry.rows.length||entry.issues.some(issue=>/HIBA|nem ismertünk fel párokat/i.test(issue)))batchFailed=true;
-    report.push(file.name+': '+entry.rows.length+' párosítási javaslat'+(!entry.rows.length?' — üres felismerés.':''),...entry.issues);
-   }catch(error){batchFailed=true;report.push(file.name+': HIBA: '+error.message);}
-   for(const [name,url] of importer.previews)previews.set(name,url);
+    const cached=Boolean(entry);
+    if(!entry){
+     const issueStart=importer.issues.length,diagnosticStart=importer.diagnostics.length;
+     const rows=await abortable(importer.read(file,{label:source}),controller.signal);
+     if(!isCurrent())return;
+     const sha256=await inputHash(file);if(!isCurrent())return;
+     entry={rows,issues:importer.issues.slice(issueStart),diagnostics:summarizeDiagnostics(importer.diagnostics.slice(diagnosticStart)),sha256,config};cache.set(file,entry);
+    }
+    if(!isCurrent())return;
+    records.push(...entry.rows.map(row=>({...row,verified:false})));
+    if(!entry.rows.length||entry.issues.some(issue=>/HIBA|nem ismertünk fel párokat/i.test(issue)))failed=true;
+    report.push(file.name+': '+entry.rows.length+' importált rekord'+(!entry.rows.length?' — üres felismerés.':''),...entry.issues);
+    fileReports.push({name:file.name,type:file.type,bytes:file.size,lastModified:file.lastModified,sha256:entry.sha256,cached,records:entry.rows.length,diagnostics:entry.diagnostics});
+   }catch(error){if(error.name==='AbortError')return;failed=true;report.push(file.name+': HIBA: '+error.message);fileReports.push({name:file.name,type:file.type,bytes:file.size,error:error.message});}
+   if(!isCurrent())return;
+   for(const[name,url]of importer.previews)previews.set(name,url);
    $('log').textContent=report.join('\n');$('progress').value=Math.round((i+1)/files.length*100);
-   if(version!==selectionVersion)break;
    await new Promise(resolve=>setTimeout(resolve,0));
   }
- }catch(error){batchFailed=true;status(error.message);}
+ }catch(error){if(error.name!=='AbortError'&&isCurrent()){failed=true;status(error.message);}}
  finally{
-  try{await importer.close();}catch{batchFailed=true;}
-  setBusy(false);
-  if(version!==selectionVersion){if(selected.length){queueMicrotask(()=>processFiles());}else{clearReview();clearCache();$('progress').dataset.state='done';}return;}
+  try{await importer.close();}catch{if(isCurrent())failed=true;}
+  if(!isCurrent())return;
+  currentJob=null;setBusy(false);pending=records;batchFailed=failed;
+  lastImportReport={version:1,appVersion:'digital-camera-4',createdAt:new Date().toISOString(),userAgent:navigator.userAgent,files:fileReports};
+  $('diagnosticsSummary').textContent=JSON.stringify(lastImportReport,null,2);$('exportDiagnostics').disabled=false;
   $('progress').dataset.state='done';
   if(pending.length){renderReview();status(batchFailed?'Az import hiányos vagy sikertelen. Az aktív dokumentáció változatlan.':'A feldolgozás kész. A megbízható adatokat egyetlen aktiválással használhatod.');}
   else status('Nem sikerült megbízható párosításokat felismerni. Az aktív dokumentáció változatlan.');
  }
 }
-$('process').onclick=()=>{selectionVersion++;processFiles({force:true});};
-$('rotation').onchange=()=>{clearCache();queueProcess();};
+$('process').onclick=()=>{selectionVersion++;resetImportReport();processFiles({force:true});};
+$('rotation').onchange=()=>{queueProcess();clearCache();};
 function download(name,content,type){const url=URL.createObjectURL(new Blob([content],{type})),link=document.createElement('a');link.href=url;link.download=name;document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),10000);}
+$('exportDiagnostics').onclick=()=>{if(lastImportReport)download('AM_OC_beolvasasi_adatok.json',JSON.stringify(lastImportReport,null,2),'application/json');};
 $('export').onclick=()=>download('AM_OC_adatok.csv','\ufeffJ-kód;AM–OC helyek\n'+Object.entries(currentDB()).map(([key,loc])=>key+';"'+loc.replace(/"/g,'""')+'"').join('\n'),'text/csv;charset=utf-8');
 $('backup').onclick=()=>download('AM_OC_biztonsagi_mentes.json',JSON.stringify({format:'amoc-backup',version:1,...state.active},null,2),'application/json');
 $('deleteActive').onclick=()=>{if(!confirm('Törlöd az aktív dokumentációt? Előzőként visszaállítható marad.'))return;try{state=deleteActive(localStorage,state);refresh();status('Az aktív dokumentáció törölve.');}catch(e){status(e.message);}};
@@ -142,7 +176,7 @@ $('reset').onclick=()=>{if(!confirm('Betöltöd az eredeti mintaadatokat?'))retu
 async function prepareCorners(){
  const version=++cornerVersion;$('useCorners').checked=false;cornerImage=null;$('perspectiveCanvas').width=$('perspectiveCanvas').height=1;
  if(selected.length!==1||!selected[0].type.startsWith('image/'))return;
- try{const source=await imageFileToCanvas(selected[0]);if(version!==cornerVersion){source.width=source.height=1;return;}const canvas=$('perspectiveCanvas'),scale=Math.min(1,640/source.width);canvas.width=Math.round(source.width*scale);canvas.height=Math.round(source.height*scale);cornerImage=document.createElement('canvas');cornerImage.width=canvas.width;cornerImage.height=canvas.height;cornerImage.getContext('2d').drawImage(source,0,0,canvas.width,canvas.height);source.width=source.height=1;manualCorners=[{x:0,y:0},{x:1,y:0},{x:1,y:1},{x:0,y:1}];drawCorners();}catch{/* The importer reports decoding errors with the original database intact. */}
+ try{const source=await imageFileToCanvas(selected[0],{maxSide:640,maxPixels:640*640});if(version!==cornerVersion){source.width=source.height=1;return;}const canvas=$('perspectiveCanvas'),scale=Math.min(1,640/source.width);canvas.width=Math.round(source.width*scale);canvas.height=Math.round(source.height*scale);cornerImage=document.createElement('canvas');cornerImage.width=canvas.width;cornerImage.height=canvas.height;cornerImage.getContext('2d').drawImage(source,0,0,canvas.width,canvas.height);source.width=source.height=1;manualCorners=[{x:0,y:0},{x:1,y:0},{x:1,y:1},{x:0,y:1}];drawCorners();}catch{/* The importer reports decoding errors with the original database intact. */}
 }
 function drawCorners(){const canvas=$('perspectiveCanvas');if(!cornerImage)return;const c=canvas.getContext('2d');c.drawImage(cornerImage,0,0);c.strokeStyle='#91e3b4';c.lineWidth=3;c.beginPath();manualCorners.forEach((p,i)=>i?c.lineTo(p.x*canvas.width,p.y*canvas.height):c.moveTo(p.x*canvas.width,p.y*canvas.height));c.closePath();c.stroke();manualCorners.forEach((p,i)=>{const x=Math.max(12,Math.min(canvas.width-12,p.x*canvas.width)),y=Math.max(12,Math.min(canvas.height-12,p.y*canvas.height));c.fillStyle='#91e3b4';c.beginPath();c.arc(x,y,12,0,Math.PI*2);c.fill();c.fillStyle='#10251a';c.font='bold 15px sans-serif';c.textAlign='center';c.fillText(String(i+1),x,y+5);});}
 const cornerCanvas=$('perspectiveCanvas');
