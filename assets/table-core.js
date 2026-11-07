@@ -150,6 +150,14 @@ export function parseText(value, {source = ''} = {}) {
 
 const validBox = cell => [cell.x0, cell.y0, cell.x1, cell.y1].every(Number.isFinite) &&
   cell.x1 > cell.x0 && cell.y1 > cell.y0;
+/** Cell topology can use a shared logical divider when photographed borders
+ * curve through different x positions. Physical boxes remain source evidence. */
+export function cellGeometry(cell) {
+  const lane=cell.laneId;
+  return ((typeof lane === 'string' && lane.length>0) || (Number.isInteger(lane) && lane>=0)) && Number.isInteger(cell.column) &&
+    cell.column >= 0 && cell.pairingBounds && validBox(cell.pairingBounds) ? cell.pairingBounds : cell;
+}
+const sameLane = (a,b) => a.laneId==null || b.laneId==null || a.laneId===b.laneId;
 const middle = cell => (cell.y0 + cell.y1) / 2;
 
 /**
@@ -159,32 +167,33 @@ const middle = cell => (cell.y0 + cell.y1) / 2;
  * Callers supplying word/PDF boxes should set ocr:true or inferred:true.
  */
 export function pairCells(cells, options = {}) {
-  const boxes = cells.filter(validBox).map(cell => ({...cell, text: clean(cell.text)}));
+  const boxes = cells.filter(validBox).map(cell => ({...cell, ...cellGeometry(cell), physicalBox:{x0:cell.x0,y0:cell.y0,x1:cell.x1,y1:cell.y1},text:clean(cell.text)}));
   const explicitKeyColumns = boxes.filter(cell => /^J\s*-?\s*\d{1,4}$/i.test(cell.text));
   const keys = boxes.map(cell => ({...cell, key: normalizeKey(cell.text)}))
     .filter(cell => cell.key && (!explicitKeyColumns.length || /^J/i.test(cell.text) ||
       explicitKeyColumns.some(key => Math.abs(key.x0 - cell.x0) < 2 && Math.abs(key.x1 - cell.x1) < 2)));
   const output = [];
   for (const cell of boxes) {
-    const places = extractPlaces(cell.text);
-    if (!places.length) continue;
+    const places=extractPlaces(cell.text);
+    const unreadable=options.includeUnparsed && cell.laneId!=null && cell.column===1 && !places.length && !/^(?:(?:A|C)[\s-]*DR|(?:CH|FR)[\s-]*OC)(?:[\s-]|$)/i.test(cell.text);
+    if(!places.length&&!unreadable)continue;
     const cy = middle(cell);
     const matches = keys.filter(key => {
       // A 15% text-height tolerance handles minor OCR baseline/border errors, but
       // never extends a merged span into the next row based on its nearest text.
       const tolerance = Math.min(cell.y1 - cell.y0, key.y1 - key.y0) * 0.15;
-      return key.x1 <= cell.x0 + 1 && cy >= key.y0 - tolerance && cy <= key.y1 + tolerance;
+      return sameLane(key,cell) && key.x1 <= cell.x0 + 1 && cy >= key.y0 - tolerance && cy <= key.y1 + tolerance;
     });
     const nearestX = matches.length ? Math.max(...matches.map(key => key.x1)) : -Infinity;
     const candidates = matches.filter(key => Math.abs(key.x1 - nearestX) <= 1);
     // A location cell that spans two different J cells is not resolved by its
     // center point. Preserve it as ambiguous rather than choosing the middle J.
-    const crossedKeys = keys.filter(key => Math.abs(key.x1 - nearestX) <= 1 &&
+    const crossedKeys = keys.filter(key => sameLane(key,cell) && Math.abs(key.x1 - nearestX) <= 1 &&
       Math.min(cell.y1, key.y1) - Math.max(cell.y0, key.y0) > Math.min(cell.y1 - cell.y0, key.y1 - key.y0) * .2);
     // A different J column between the source and location is a table boundary,
     // even if that column's current row has no vertically matching key.
     const blocked = candidates.some(key => keys.some(other =>
-      other.x0 > key.x1 + 1 && other.x0 < cell.x0 && other.x1 <= cell.x0 + 1));
+      sameLane(other,cell) && other.x0 > key.x1 + 1 && other.x0 < cell.x0 && other.x1 <= cell.x0 + 1));
     const keyValues = unique(candidates.map(key => key.key));
     const ambiguous = keyValues.length !== 1 || blocked || unique(crossedKeys.map(key => key.key)).length > 1;
     const reasons = [
@@ -194,12 +203,13 @@ export function pairCells(cells, options = {}) {
     if (ambiguous) reasons.push(candidates.length ? 'Többértelmű cellapárosítás vagy másik táblázatoszlop.' :
       'Nincs az AM–OC cellát lefedő J-cella.');
     if (!ambiguous && !explicitKeyColumns.length) reasons.push('Számból becsült J-kód: nincs J-jelölésű cella.');
+    if(unreadable){if(ambiguous)continue;reasons.push('Az ehhez a J-kódhoz tartozó helycella nem olvasható; a teljes J-kód kimarad a biztos adatokból.');}
     if (options.inferred) reasons.push('Becsült cellahatárok; ellenőrizd a párosítást.');
     if (cell.confidence !== undefined && cell.confidence < 85 || candidates.some(key => key.confidence !== undefined && key.confidence < 85)) {
       reasons.push('Alacsony OCR-biztonság.');
     }
     output.push({...record(ambiguous ? '' : keyValues[0], places, options, reasons),
-      bbox: {x0: cell.x0, y0: cell.y0, x1: cell.x1, y1: cell.y1}});
+      bbox: cell.physicalBox});
   }
   return output;
 }

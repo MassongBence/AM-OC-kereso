@@ -1,7 +1,7 @@
 // Repository-relative app shell. Uploaded documents and OCR results are never
 // network requests and are never added to this cache. localStorage owns data.
-const VERSION='amoc-shell-2';
-const SHELL=['./','./index.html','./manifest.webmanifest','./assets/app.js','./assets/style.css','./assets/original-data.js','./assets/document-store.js','./assets/table-core.js','./assets/importers.js','./assets/image-pipeline.js','./assets/ocr-suggestions.js','./assets/workbook-worker.js','./assets/icon.svg','./assets/apple-touch-icon.png','./vendor/pdf.min.mjs','./vendor/pdf.worker.min.mjs','./vendor/tesseract.min.js','./vendor/worker.min.js','./vendor/tesseract-core-lstm.wasm.js','./vendor/lang/eng.traineddata.gz','./vendor/xlsx.full.min.js'];
+const VERSION='amoc-shell-3';
+const SHELL=['./','./index.html','./manifest.webmanifest','./assets/app.js','./assets/style.css','./assets/original-data.js','./assets/document-store.js','./assets/table-core.js','./assets/importers.js','./assets/image-pipeline.js','./assets/ocr-suggestions.js','./assets/cell-ocr.js','./assets/workbook-worker.js','./assets/icon.svg','./assets/apple-touch-icon.png','./vendor/pdf.min.mjs','./vendor/pdf.worker.min.mjs','./vendor/tesseract.min.js','./vendor/worker.min.js','./vendor/tesseract-core-lstm.wasm.js','./vendor/lang/eng.traineddata.gz','./vendor/xlsx.full.min.js'];
 self.addEventListener('install',event=>event.waitUntil(caches.open(VERSION).then(cache=>cache.addAll(SHELL))));
 // Wait for existing pages to close before switching code generations.
 self.addEventListener('activate',event=>event.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(key=>key.startsWith('amoc-shell-')&&key!==VERSION).map(key=>caches.delete(key))))));

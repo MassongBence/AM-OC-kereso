@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {adaptiveThreshold, detectCells, estimateSkew, assignWordsToCells, contrastGrayscale, validatePerspectiveCorners, perspectiveHomography, warpPerspectivePixels, detectPerspectiveQuad} from '../assets/image-pipeline.js';
+import {adaptiveThreshold, detectCells, estimateSkew, assignWordsToCells, contrastGrayscale, validatePerspectiveCorners, perspectiveHomography, warpPerspectivePixels, detectPerspectiveQuad, detectCurvedCells} from '../assets/image-pipeline.js';
 
 function ruledTable() {
   const width = 500, height = 400, binary = new Uint8Array(width * height);
@@ -132,4 +132,52 @@ test('detected perspective correction restores a grid with a vertically merged k
   const key=cells[0];
   assert(key.y1-key.y0>warped.height*.45,'merged J cell should span two location rows');
   assert.equal(cells.filter(cell=>cell.x0>key.x0&&cell.y1<key.y1+3).length,2);
+});
+
+
+function curvedParallelTables({openTop=false}={}) {
+  const width=800,height=650,binary=new Uint8Array(width*height);
+  const point=(x,y)=>({x:x+14*Math.sin(y/80)+y*.012,y:y+x*.035});
+  const ink=(x,y)=>{for(let yy=y-1;yy<=y+1;yy++)for(let xx=x-1;xx<=x+1;xx++)if(xx>=0&&xx<width&&yy>=0&&yy<height)binary[yy*width+xx]=1;};
+  const vertical=x=>{for(let y=50;y<=550;y+=.4){const p=point(x,y);ink(Math.round(p.x),Math.round(p.y));}};
+  const horizontal=(y,x0,x1)=>{for(let x=x0;x<=x1;x+=.4){const p=point(x,y);ink(Math.round(p.x),Math.round(p.y));}};
+  for(const [left,middle,right]of [[40,110,260],[410,480,630]]){
+    for(const x of[left,middle,right])vertical(x);
+    for(const y of[50,190,300,420,550])if(!openTop||y!==50)horizontal(y,left,right);
+    for(const y of[120,250,360,480])horizontal(y,middle,right);
+  }
+  return{width,height,binary};
+}
+
+test('curved independent table lanes follow shared borders rather than fixed page-wide x positions',()=>{
+  const{binary,width,height}=curvedParallelTables();
+  const cells=detectCurvedCells(binary,width,height);
+  assert.equal(cells.length,24);
+  assert.deepEqual([...new Set(cells.map(cell=>cell.laneId))],[0,1]);
+  for(const laneId of[0,1]){
+    const keys=cells.filter(cell=>cell.laneId===laneId&&cell.column===0),locations=cells.filter(cell=>cell.laneId===laneId&&cell.column===1);
+    assert.equal(keys.length,4);assert.equal(locations.length,8);
+    assert(keys[0].pairingBounds.y1-keys[0].pairingBounds.y0>130,'first J cell spans two rows');
+    assert.equal(locations.filter(cell=>(cell.pairingBounds.y0+cell.pairingBounds.y1)/2<keys[0].pairingBounds.y1).length,2);
+    assert(keys.every(key=>key.pairingBounds.x1===locations[0].pairingBounds.x0));
+    assert(cells.filter(cell=>cell.laneId===laneId).every(cell=>cell.ruleSupport>=.7&&cell.polygon.length===4));
+  }
+  assert(cells.every(cell=>cell.x1-cell.x0<180),'blank gutter is not a table cell');
+});
+
+test('open top cells are bounded by visible vertical rules and a real opposite separator',()=>{
+  const{binary,width,height}=curvedParallelTables({openTop:true});
+  const cells=detectCurvedCells(binary,width,height);
+  assert.equal(cells.length,24);
+  for(const laneId of[0,1])for(const column of[0,1]){
+    const first=cells.find(cell=>cell.laneId===laneId&&cell.column===column);
+    assert.equal(first.openTop,true);assert.equal(first.openBottom,false);
+    assert(first.y0>45&&first.y0<80);
+  }
+});
+
+test('word assignment retains curved-lane crop and logical pairing geometry',()=>{
+  const geometry={x0:10,y0:10,x1:100,y1:60,laneId:0,column:1,pairingBounds:{x0:100,y0:12,x1:200,y1:57},polygon:[{x:10,y:10},{x:98,y:15},{x:100,y:60},{x:12,y:55}]};
+  const assigned=assignWordsToCells([{text:'AM-OC-123',bbox:{x0:20,y0:25,x1:90,y1:45},confidence:98}],[geometry]);
+  assert.equal(assigned[0].laneId,0);assert.deepEqual(assigned[0].pairingBounds,geometry.pairingBounds);assert.deepEqual(assigned[0].polygon,geometry.polygon);
 });

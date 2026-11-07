@@ -170,3 +170,30 @@ test('numeric Excel keys use J, unaccented kod and underscored headers without t
     assert.equal(rows[0].key,'J069');assert.equal(rows[0].uncertain,false);
   }
 });
+
+test('curved cell borders share logical dividers without overlapping physical crop boxes breaking pairing',()=>{
+  const cells=[
+    {text:'J069',x0:20,y0:20,x1:125,y1:180,laneId:'a',column:0,pairingBounds:{x0:0,y0:20,x1:100,y1:180}},
+    {text:'AM-OC-425',x0:110,y0:20,x1:300,y1:100,laneId:'a',column:1,pairingBounds:{x0:100,y0:20,x1:200,y1:100}},
+    {text:'AM-OC-426',x0:115,y0:100,x1:310,y1:180,laneId:'a',column:1,pairingBounds:{x0:100,y0:100,x1:200,y1:180}},
+  ];
+  const result=pairCells(cells);assert.deepEqual(result.map(r=>r.key),['J069','J069']);
+  assert.deepEqual(result[0].bbox,{x0:110,y0:20,x1:300,y1:100});
+});
+test('logical cell coordinates cannot join separate table lanes or repair missing J cells',()=>{
+  const rows=pairCells([
+    {text:'J069',x0:20,y0:20,x1:100,y1:90,laneId:'a',column:0,pairingBounds:{x0:0,y0:20,x1:100,y1:90}},
+    {text:'AM-OC-425',x0:110,y0:20,x1:300,y1:90,laneId:'b',column:1,pairingBounds:{x0:100,y0:20,x1:200,y1:90}},
+  ]);
+  assert.equal(rows[0].key,'');assert.equal(rows[0].uncertain,true);
+});
+
+test('unreadable physical location cells retain their known J as incomplete without inventing a location',()=>{
+ const base={laneId:0};
+ const cells=[{...base,column:0,text:'J069',x0:10,y0:10,x1:100,y1:100},
+ {...base,column:1,text:'AM-OC-425',x0:100,y0:10,x1:220,y1:40},
+ {...base,column:1,text:'AM-?C-4??',x0:100,y0:40,x1:220,y1:70},
+ {...base,column:1,text:'A-DR-005-X',x0:100,y0:70,x1:220,y1:100}];
+ const result=pairCells(cells,{includeUnparsed:true});
+ assert.equal(result.length,2);assert.equal(result[1].key,'J069');assert.equal(result[1].loc,'');assert.equal(result[1].uncertain,true);
+});
