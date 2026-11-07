@@ -1,0 +1,32 @@
+{
+  "documentId": "synthetic-clean-and-skew-shadow",
+  "kind": "synthetic",
+  "review": {
+    "status": "checked",
+    "method": "two-pass-manual"
+  },
+  "sources": [
+    {
+      "name": "ruled-table.png",
+      "sha256": "2c5ba345112a66b05c114faba1614d6d18dd6828d1145470315be111452a676c"
+    },
+    {
+      "name": "ruled-table-skew-shadow.png",
+      "sha256": "1f3c8615f254901e58cd91e06f49d517566b41a0c3bc27fb426583f4ff94c4ea"
+    }
+  ],
+  "reference": [
+    {
+      "key": "J069",
+      "loc": "AM-OC-425"
+    },
+    {
+      "key": "J069",
+      "loc": "AM-OC-426"
+    },
+    {
+      "key": "J070",
+      "loc": "AM-OC-588"
+    }
+  ]
+}

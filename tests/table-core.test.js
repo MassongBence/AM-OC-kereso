@@ -163,3 +163,10 @@ test('aggregation excludes invalid records and preserves all repeated locations'
   assert.deepEqual(aggregate([{key: 'J069', loc: 'AM-OC-425'}, {key: '69', loc: 'AM-OC-425, AM-OC-426'},
     {key: '', loc: 'AM-OC-999'}, {key: 'J070', loc: 'FR-OC-123'}]), {J069: 'AM-OC-425, AM-OC-426'});
 });
+
+test('numeric Excel keys use J, unaccented kod and underscored headers without treating quantities as keys', () => {
+  for (const header of ['J','J-kod','J_kód','J code']) {
+    const rows=pairRows([[header,'Mennyiség','Hely'],['069','2','AM-OC-425']]);
+    assert.equal(rows[0].key,'J069');assert.equal(rows[0].uncertain,false);
+  }
+});

@@ -1,0 +1,220 @@
+{
+  "schemaVersion": 1,
+  "documentId": "synthetic-clean-and-skew-shadow",
+  "kind": "synthetic",
+  "createdAt": "2026-11-07T04:15:26.417Z",
+  "elapsedMs": 5316,
+  "sources": [
+    {
+      "name": "ruled-table.png",
+      "sha256": "2c5ba345112a66b05c114faba1614d6d18dd6828d1145470315be111452a676c"
+    },
+    {
+      "name": "ruled-table-skew-shadow.png",
+      "sha256": "1f3c8615f254901e58cd91e06f49d517566b41a0c3bc27fb426583f4ff94c4ea"
+    }
+  ],
+  "allCandidates": {
+    "referencePairs": 3,
+    "predictedPairs": 3,
+    "truePositive": 3,
+    "falsePositive": 0,
+    "falseNegative": 0,
+    "precision": 1,
+    "recall": 1,
+    "f1": 1,
+    "correctPairingRate": 1,
+    "invalidCandidates": 0,
+    "duplicatePairs": 3,
+    "threshold": 0.95,
+    "meetsTarget": true,
+    "correct": [
+      {
+        "key": "J069",
+        "loc": "AM-OC-425"
+      },
+      {
+        "key": "J069",
+        "loc": "AM-OC-426"
+      },
+      {
+        "key": "J070",
+        "loc": "AM-OC-588"
+      }
+    ],
+    "missing": [],
+    "wrong": []
+  },
+  "reliableOnly": {
+    "referencePairs": 3,
+    "predictedPairs": 3,
+    "truePositive": 3,
+    "falsePositive": 0,
+    "falseNegative": 0,
+    "precision": 1,
+    "recall": 1,
+    "f1": 1,
+    "correctPairingRate": 1,
+    "invalidCandidates": 0,
+    "duplicatePairs": 0,
+    "threshold": 0.95,
+    "meetsTarget": true,
+    "correct": [
+      {
+        "key": "J069",
+        "loc": "AM-OC-425"
+      },
+      {
+        "key": "J069",
+        "loc": "AM-OC-426"
+      },
+      {
+        "key": "J070",
+        "loc": "AM-OC-588"
+      }
+    ],
+    "missing": [],
+    "wrong": []
+  },
+  "methods": {
+    "cell-consensus": {
+      "referencePairs": 3,
+      "predictedPairs": 3,
+      "truePositive": 3,
+      "falsePositive": 0,
+      "falseNegative": 0,
+      "precision": 1,
+      "recall": 1,
+      "f1": 1,
+      "correctPairingRate": 1,
+      "invalidCandidates": 0,
+      "duplicatePairs": 3,
+      "threshold": 0.95,
+      "meetsTarget": true,
+      "correct": [
+        {
+          "key": "J069",
+          "loc": "AM-OC-425"
+        },
+        {
+          "key": "J069",
+          "loc": "AM-OC-426"
+        },
+        {
+          "key": "J070",
+          "loc": "AM-OC-588"
+        }
+      ],
+      "missing": [],
+      "wrong": []
+    },
+    "gray-block": {
+      "referencePairs": 3,
+      "predictedPairs": 0,
+      "truePositive": 0,
+      "falsePositive": 0,
+      "falseNegative": 3,
+      "precision": null,
+      "recall": 0,
+      "f1": 0,
+      "correctPairingRate": 0,
+      "invalidCandidates": 0,
+      "duplicatePairs": 0,
+      "threshold": 0.95,
+      "meetsTarget": false,
+      "correct": [],
+      "missing": [
+        {
+          "key": "J069",
+          "loc": "AM-OC-425"
+        },
+        {
+          "key": "J069",
+          "loc": "AM-OC-426"
+        },
+        {
+          "key": "J070",
+          "loc": "AM-OC-588"
+        }
+      ],
+      "wrong": []
+    },
+    "gray-line": {
+      "referencePairs": 3,
+      "predictedPairs": 0,
+      "truePositive": 0,
+      "falsePositive": 0,
+      "falseNegative": 3,
+      "precision": null,
+      "recall": 0,
+      "f1": 0,
+      "correctPairingRate": 0,
+      "invalidCandidates": 2,
+      "duplicatePairs": 0,
+      "threshold": 0.95,
+      "meetsTarget": false,
+      "correct": [],
+      "missing": [
+        {
+          "key": "J069",
+          "loc": "AM-OC-425"
+        },
+        {
+          "key": "J069",
+          "loc": "AM-OC-426"
+        },
+        {
+          "key": "J070",
+          "loc": "AM-OC-588"
+        }
+      ],
+      "wrong": []
+    },
+    "threshold-block": {
+      "referencePairs": 3,
+      "predictedPairs": 0,
+      "truePositive": 0,
+      "falsePositive": 0,
+      "falseNegative": 3,
+      "precision": null,
+      "recall": 0,
+      "f1": 0,
+      "correctPairingRate": 0,
+      "invalidCandidates": 2,
+      "duplicatePairs": 0,
+      "threshold": 0.95,
+      "meetsTarget": false,
+      "correct": [],
+      "missing": [
+        {
+          "key": "J069",
+          "loc": "AM-OC-425"
+        },
+        {
+          "key": "J069",
+          "loc": "AM-OC-426"
+        },
+        {
+          "key": "J070",
+          "loc": "AM-OC-588"
+        }
+      ],
+      "wrong": []
+    }
+  },
+  "realTarget": {
+    "established": false,
+    "scope": "Only the supplied, manually checked input corpus; not general OCR accuracy.",
+    "blockers": [
+      "The inputs are synthetic, not real document photographs."
+    ]
+  },
+  "issues": [],
+  "failures": [],
+  "notes": [
+    "Exact J/location pairs are deduplicated across pages.",
+    "A wrong J assignment counts as both an extra pair and a missed reference pair.",
+    "Uncertain candidates are excluded from the active-document score; candidate recall is reported separately.",
+    "This report is not proof of accuracy on documents outside the supplied corpus."
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "id": "./",
+  "name": "AM–OC kereső",
+  "short_name": "AM–OC",
+  "lang": "hu",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#0b1120",
+  "theme_color": "#0b1120",
+  "icons": [{"src":"./assets/icon.svg","sizes":"any","type":"image/svg+xml","purpose":"any"}, {"src":"./assets/apple-touch-icon.png","sizes":"180x180","type":"image/png","purpose":"any"}]
+}

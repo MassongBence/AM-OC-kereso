@@ -4,6 +4,11 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#0b1120">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="AM–OC">
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="apple-touch-icon" href="./assets/apple-touch-icon.png">
   <title>AM–OC kereső</title>
   <link rel="stylesheet" href="./assets/style.css">
   <script type="module" src="./assets/app.js"></script>
@@ -11,16 +16,25 @@
 <body>
 <main>
   <h1>🔎 AM–OC kereső</h1>
-  <p class="sub">J-kód → AM–OC hely. Nyomtatott táblázatok beolvasása és ellenőrzése.</p>
+  <p class="sub">J-kód → AM–OC hely. Dokumentáció feltöltése → egy aktiválás → keresés.</p>
   <section class="panel" aria-labelledby="searchTitle">
-    <h2 id="searchTitle">1. Azonnali keresés</h2>
+    <h2 id="searchTitle">J-kód keresése</h2>
     <label for="search">J-kód</label>
     <input id="search" type="text" inputmode="text" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="Például: 69 vagy J069" enterkeyhint="search">
     <p id="result" class="result" role="status" aria-live="polite">Írj be egy J-kódot!</p>
     <div id="count" class="small"></div>
   </section>
+  <section class="panel" aria-labelledby="activeTitle">
+    <h2 id="activeTitle">Aktív dokumentáció</h2>
+    <div id="activeDocument" class="small" aria-live="polite"></div>
+    <div class="row"><button id="showActive" class="secondary">Tartalom megjelenítése</button><button id="newDocument">Új dokumentáció</button></div>
+    <div id="activeRows" class="hide small"></div>
+    <div class="row"><button id="deleteActive" class="danger">Aktív törlése</button><button id="restorePrevious" class="secondary">Előző visszaállítása</button></div>
+  </section>
   <section class="panel" aria-labelledby="importTitle">
-    <h2 id="importTitle">2. Új dokumentáció</h2>
+    <h2 id="importTitle">Új dokumentáció betöltése</h2>
+    <label for="documentName">Dokumentáció neve</label>
+    <input id="documentName" type="text" placeholder="Például: novemberi kiosztás" maxlength="160">
     <label for="files">Több fénykép, PDF, Excel, CSV, TXT vagy JSON biztonsági mentés</label>
     <input id="files" type="file" multiple accept="image/*,.pdf,.xlsx,.xls,.csv,.txt,.json,application/pdf,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
     <div class="row">
@@ -29,31 +43,41 @@
     </div>
     <input id="camera" class="hide" type="file" accept="image/*" capture="environment">
     <div id="picked" class="small" aria-live="polite"></div>
-    <label for="rotation">Fényképek / szkennelt oldalak elforgatása</label>
-    <select id="rotation"><option value="0">Eredeti irány</option><option value="90">90° jobbra</option><option value="180">180°</option><option value="270">90° balra</option></select>
-    <p class="small">A lap legyen teljesen látható, lehetőleg sík és jól megvilágított. Kisebb dőlést és egyenetlen megvilágítást korrigálunk; a gyűrődés vagy az elmosódás továbbra is hibát okozhat. Több fotóhoz használd a fenti fájlválasztót, vagy fotózz újra.</p>
-    <button id="process">Fájlok feldolgozása</button>
+    <p class="small">A kiválasztott fájlok feldolgozása automatikusan indul. A régi dokumentáció aktiválásig megmarad.</p>
+    <details id="imageOptions"><summary>Képigazítás és újrafeldolgozás</summary>
+      <label for="rotation">Fényképek / szkennelt oldalak elforgatása</label>
+      <select id="rotation"><option value="0">Automatikus / eredeti irány</option><option value="90">90° jobbra</option><option value="180">180°</option><option value="270">90° balra</option></select>
+      <details id="perspectiveOptions"><summary>Perspektíva kézi igazítása egy fotón</summary>
+        <p class="small">Ha az automatikus igazítás nem elég, húzd a négy jelölőt a táblázat sarkaira: bal felső, jobb felső, jobb alsó, bal alsó. Több fájlnál minden kép külön automatikus igazítást kap.</p>
+        <canvas id="perspectiveCanvas" width="1" height="1" aria-label="A táblázat négy sarkának kijelölése"></canvas>
+        <label class="check"><input id="useCorners" type="checkbox"> Kijelölt sarkok használata ennél a fotónál</label>
+        <button id="resetCorners" class="secondary">Sarkok alaphelyzetbe</button>
+      </details>
+      <button id="process">Újrafeldolgozás</button>
+    </details>
     <progress id="progress" class="hide" max="100" value="0" aria-label="Feldolgozás"></progress>
     <p id="status" class="status" role="status" aria-live="polite"></p>
     <div id="log" class="small"></div>
-    <p class="small hint">A dokumentum helyben, a böngészőben dolgozódik fel. A képfelismerő motor és a nyelvi modell is erről a webhelyről töltődik be; a dokumentumot nem küldjük külső felismerő szolgáltatásnak. A felismerés nem garantált: a sárgával jelölt párokat ellenőrizni kell. Az aktuális adatbázis jóváhagyásig változatlan.</p>
+    <p class="small hint">A dokumentum helyben, a böngészőben dolgozódik fel. A képfelismerő motor és a nyelvi modell is erről a webhelyről töltődik be; a dokumentumot nem küldjük külső felismerő szolgáltatásnak. A bizonytalan találatok kimaradnak az automatikusan aktiválható adatokból. A felismerés nem garantált. Az aktuális adatbázis jóváhagyásig változatlan.</p>
   </section>
   <section id="reviewPanel" class="panel hide" aria-labelledby="reviewTitle">
-    <h2 id="reviewTitle">3. Felismert adatok ellenőrzése</h2>
+    <h2 id="reviewTitle">Feldolgozás eredménye</h2>
     <p id="reviewSummary" class="small"></p>
-    <div id="review"></div>
-    <figure id="sourcePreview" class="hide"><figcaption id="previewLabel"></figcaption><img id="previewImage" alt="A feldolgozott dokumentum oldala"><p class="small">Nagyításhoz használd a böngésző kétujjas nagyítását.</p></figure>
-    <button id="add" class="secondary">+ Sor hozzáadása</button>
-    <p class="small">A hiányzó J-kódot töltsd ki, a hibás sort javítsd vagy töröld. A bizonytalan párok egyenkénti ellenőrzést igényelnek. Minden beírt helynek érvényes AM–OC kódnak kell lennie.</p>
-    <label class="check"><input id="replaceConfirm" type="checkbox"> Ellenőriztem a teljes dokumentációt. Az új adatokkal lecserélem az aktuális adatbázist.</label>
-    <div class="row"><button id="apply">✓ Ellenőriztem, használom</button><button id="cancel" class="secondary">Mégse</button></div>
+    <div class="row"><button id="apply">Dokumentáció aktiválása</button><button id="cancel" class="secondary">Elvetés</button></div>
+    <div id="review">
+      <details><summary id="reliableSummary">Megbízható párosítások</summary><div id="reliableReview"></div></details>
+      <details><summary id="uncertainSummary">Kimaradó, bizonytalan találatok</summary><p class="small">Ezek nem kerülnek biztos eredményként a keresőbe. Nem kell egyenként jóváhagynod őket az egyéb megbízható adatok aktiválásához. Az érintett J-kód teljes egészében kimarad, hogy egy hiányos helylista se tűnjön teljesnek.</p><div id="uncertainReview"></div></details>
+      <details><summary>Forrásoldalak megtekintése</summary><div id="sourceButtons"></div></details>
+      <details><summary>Kézi javítás (opcionális)</summary><p class="small">Csak akkor használd, ha egy bizonytalan sort az eredeti dokumentumból egyértelműen azonosítottál.</p><button id="add" class="secondary">+ Kézi sor</button></details>
+    </div>
+    <figure id="sourcePreview" class="hide"><figcaption id="previewLabel"></figcaption><img id="previewImage" alt="A feldolgozott dokumentum eredeti oldala"></figure>
     <p id="reviewStatus" class="status warn" role="alert"></p>
   </section>
   <section class="panel" aria-labelledby="dbTitle">
-    <h2 id="dbTitle">Adatbázis és biztonsági mentés</h2>
+    <h2 id="dbTitle">Biztonsági mentés</h2>
     <span id="dbStatus" class="pill"></span>
     <div class="row"><button id="export" class="secondary">CSV mentése</button><button id="backup" class="secondary">Teljes mentés (JSON)</button></div>
-    <div class="row"><button id="restorePrevious" class="secondary">Előző adatbázis visszaállítása</button><button id="reset" class="danger">Eredeti adatok</button></div>
+    <details><summary>Eredeti mintaadatok</summary><button id="reset" class="secondary">Eredeti adatok betöltése</button></details>
     <p class="small">Jóváhagyáskor megőrizzük az előző adatbázist is. A böngésző adatainak törlése a helyi mentést is törli; tölts le CSV- vagy JSON-mentést. Visszaállításhoz importáld a mentést, majd ellenőrizd és hagyd jóvá.</p>
   </section>
   <noscript>A használathoz engedélyezd a JavaScriptet.</noscript>
